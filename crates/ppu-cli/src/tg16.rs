@@ -125,3 +125,37 @@ pub fn new_project(dir: &Path) -> Result<()> {
     fs::write(dir.join("main.lua"), STARTER)?;
     Ok(())
 }
+
+/// Play `duration` seconds and write the PSG output as a 16-bit stereo WAV.
+pub fn audio(path: &Path, duration: f64, out: &Path) -> Result<()> {
+    let end = crate::frame_number(duration)?;
+    ensure!(end > 0, "duration must be at least one frame");
+    let mut e = engine(path)?;
+    let mut samples: Vec<i16> = Vec::new();
+    for f in 0..end {
+        e.frame(f64::from(f) / 60.0, f)
+            .map_err(|err| anyhow::anyhow!("frame {f}: {err}"))?;
+        samples.extend_from_slice(e.audio());
+    }
+    let rate = tg16_core::SAMPLE_RATE;
+    let data_len = (samples.len() * 2) as u32;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&2u16.to_le_bytes()); // stereo
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 4).to_le_bytes());
+    wav.extend_from_slice(&4u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+    fs::write(out, wav).with_context(|| format!("cannot write {}", out.display()))?;
+    println!("{} ({duration}s)", out.display());
+    Ok(())
+}

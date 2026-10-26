@@ -13,6 +13,7 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
   ppu tg16 new <dir>
   ppu tg16 render <dir|file.lua> --at seconds,... -o <directory>
   ppu tg16 check <dir|file.lua> [--duration seconds] [--allow-overflow]
+  ppu tg16 audio <dir|file.lua> [--duration seconds] -o <file.wav>
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
@@ -150,6 +151,15 @@ fn tg16(mut args: Vec<String>) -> Result<()> {
             };
             ensure!(args.is_empty(), "unknown check arguments: {args:?}");
             ppu_cli::tg16::check(&input, duration, allow_overflow)?;
+        }
+        "audio" => {
+            let duration = option(&mut args, "--duration")?
+                .unwrap_or_else(|| "8".into())
+                .parse()
+                .context("invalid duration")?;
+            let output = option(&mut args, "-o")?.context("audio requires -o <file.wav>")?;
+            ensure!(args.is_empty(), "unknown audio arguments: {args:?}");
+            ppu_cli::tg16::audio(&input, duration, Path::new(&output))?;
         }
         _ => bail!("unknown tg16 command {command:?}; use ppu --help"),
     }

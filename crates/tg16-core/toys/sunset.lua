@@ -45,9 +45,26 @@ function init()
     spal(p, 1, rgb3(7, 2 + p * 2, 1))
     spal(p, 2, rgb3(7, 6, 3 + p * 2))
   end
+
+  -- Sound: a lead, a bass and a noise hi-hat on the PSG.
+  wave(1, "pulse25")
+  wave(2, "triangle")
+  psg(1, { vol = 24, left = 15, right = 11 })
+  psg(2, { vol = 28 })
+  psg(5, { vol = 18, left = 11, right = 15 })
 end
 
+local LEAD = { "E5", "G5", "B5", "G5", "D5", "G5", "A5", "F#5" }
+local BASS = { "E2", "E2", "C2", "C2", "G2", "G2", "D2", "D2" }
+
 function frame(t, f)
+  -- 8 steps per bar at 120 BPM; each note sounds for most of its step.
+  local step = floor(f / 15)
+  local held = f % 15 < 12
+  psg(1, { on = held, note = LEAD[step % 8 + 1] })
+  psg(2, { on = true, note = BASS[floor(step / 2) % 8 + 1] })
+  psg(5, { on = f % 15 < 2, noise = 30 })
+
   local bob = floor(sin(t * 3) * 6)
   spr(0, 40, 60 + bob, 64, { w = 32, h = 32, pal = 0 })
   spr(1, 120, 118, 64, { w = 32, h = 32, pal = 1, front = false })

@@ -13,6 +13,7 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
+use crate::psg::{period_for_hz, preset_wave, Psg, CHANNELS, SAMPLES_PER_FRAME};
 use crate::render::{render, Frame, LineRegs, Output, MAX_HEIGHT, MAX_WIDTH};
 use crate::vce::{grb, rgb8, Vce};
 use crate::vdc::{BatEntry, BatSize, Sprite, Vdc, SPRITE_COUNT, VRAM_WORDS};
@@ -68,6 +69,7 @@ struct State {
     /// the BAT stepping on each other (they share one 64 KB VRAM).
     owner: Vec<Owner>,
     warnings: Vec<String>,
+    psg: Psg,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +129,38 @@ pub struct Engine {
     init_fn: Option<StashedFunction>,
     frame_fn: Option<StashedFunction>,
     frame_file: Option<String>,
+    audio: Vec<i16>,
+    /// Fractional output samples carried between frames.
+    audio_carry: f64,
+}
+
+/// MIDI note number from a number or a name like "A4", "C#3", "Bb2".
+fn note_number(v: Value<'_>) -> Option<f64> {
+    match v {
+        Value::Integer(i) => Some(i as f64),
+        Value::Number(n) => Some(n),
+        Value::String(s) => {
+            let b = s.as_bytes();
+            let base = match b.first()?.to_ascii_uppercase() {
+                b'C' => 0,
+                b'D' => 2,
+                b'E' => 4,
+                b'F' => 5,
+                b'G' => 7,
+                b'A' => 9,
+                b'B' => 11,
+                _ => return None,
+            };
+            let (shift, rest) = match b.get(1) {
+                Some(b'#') => (1, &b[2..]),
+                Some(b'b') => (-1, &b[2..]),
+                _ => (0, &b[1..]),
+            };
+            let octave: i32 = std::str::from_utf8(rest).ok()?.parse().ok()?;
+            Some(((octave + 1) * 12 + base + shift) as f64)
+        }
+        _ => None,
+    }
 }
 
 fn int(v: Value<'_>) -> Option<i64> {
@@ -171,6 +205,14 @@ fn pixels<'gc>(ctx: piccolo::Context<'gc>, v: Value<'gc>, n: usize) -> Result<Ve
             .collect::<Result<_, _>>()
             .map_err(|_| format!("expected a table of {n} numbers")),
         _ => Err("pixels must be a hex string or a table".into()),
+    }
+}
+
+/// A PSG channel argument, 1..6 in Lua, 0..5 here.
+fn channel<'gc>(ctx: piccolo::Context<'gc>, v: Value<'gc>) -> Result<usize, piccolo::Error<'gc>> {
+    match int(v) {
+        Some(c) if (1..=CHANNELS as i64).contains(&c) => Ok(c as usize - 1),
+        _ => Err(err(ctx, "PSG channel must be 1..6")),
     }
 }
 
@@ -358,6 +400,138 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
         }),
     );
 
+    // wave(ch, preset_or_table): load a 32-step waveform into channel 1..6.
+    let st = state.clone();
+    set(
+        "wave",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let ch = channel(ctx, stack.get(0))?;
+            let w: [u8; 32] = match stack.get(1) {
+                Value::String(name) => {
+                    let name = name.to_str_lossy();
+                    preset_wave(&name).ok_or_else(|| {
+                        err(ctx, &format!("wave: unknown preset {name:?} (sine, square, pulse25, pulse12, saw, triangle)"))
+                    })?
+                }
+                Value::Table(t) => {
+                    let mut w = [0u8; 32];
+                    for (i, s) in w.iter_mut().enumerate() {
+                        *s = int(t.get(ctx, i as i64 + 1))
+                            .ok_or_else(|| err(ctx, "wave: table needs 32 numbers 0..31"))?
+                            .clamp(0, 31) as u8;
+                    }
+                    w
+                }
+                _ => return Err(err(ctx, "wave(ch, preset or table)")),
+            };
+            let mut s = st.borrow_mut();
+            s.psg.channels[ch].wave = w;
+            s.psg.reset_phase(ch);
+            stack.clear();
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    // psg(ch, {on, note, hz, period, vol, left, right, noise, dda}): set the
+    // given registers of channel 1..6; the rest keep their values.
+    let st = state.clone();
+    set(
+        "psg",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let ch = channel(ctx, stack.get(0))?;
+            let Value::Table(o) = stack.get(1) else {
+                return Err(err(
+                    ctx,
+                    "psg(ch, {on, note, hz, period, vol, left, right, noise, dda})",
+                ));
+            };
+            let mut s = st.borrow_mut();
+            let c = &mut s.psg.channels[ch];
+            let get = |k: &'static str| o.get(ctx, k);
+            if !matches!(get("on"), Value::Nil) {
+                c.on = truthy(get("on"));
+            }
+            match get("note") {
+                Value::Nil => {}
+                v => {
+                    let n = note_number(v).ok_or_else(|| {
+                        err(ctx, "psg: note must be a number or a name like \"A4\"")
+                    })?;
+                    c.period = period_for_hz(440.0 * 2f64.powf((n - 69.0) / 12.0));
+                }
+            }
+            if let Value::Integer(_) | Value::Number(_) = get("hz") {
+                let hz = match get("hz") {
+                    Value::Integer(i) => i as f64,
+                    Value::Number(n) => n,
+                    _ => 0.0,
+                };
+                c.period = period_for_hz(hz);
+            }
+            if let Some(p) = int(get("period")) {
+                c.period = p.clamp(0, 4095) as u16;
+            }
+            if let Some(v) = int(get("vol")) {
+                c.volume = v.clamp(0, 31) as u8;
+            }
+            if let Some(v) = int(get("left")) {
+                c.left = v.clamp(0, 15) as u8;
+            }
+            if let Some(v) = int(get("right")) {
+                c.right = v.clamp(0, 15) as u8;
+            }
+            match get("noise") {
+                Value::Nil => {}
+                Value::Boolean(b) => c.noise = b,
+                v => {
+                    if ch < 4 {
+                        return Err(err(ctx, "psg: only channels 5 and 6 have noise"));
+                    }
+                    c.noise = true;
+                    c.noise_freq = int(v).unwrap_or(0).clamp(0, 31) as u8;
+                }
+            }
+            match get("dda") {
+                Value::Nil => {}
+                Value::Boolean(b) => c.dda = b,
+                v => {
+                    c.dda = true;
+                    c.dda_level = int(v).unwrap_or(16).clamp(0, 31) as u8;
+                }
+            }
+            stack.clear();
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    // master(left, right): master balance, 0..15 each.
+    let st = state.clone();
+    set(
+        "master",
+        Callback::from_fn(&ctx, move |_, _, mut stack| {
+            let l = int(stack.get(0)).unwrap_or(15).clamp(0, 15) as u8;
+            let r = int(stack.get(1)).map_or(l, |r| r.clamp(0, 15) as u8);
+            let mut s = st.borrow_mut();
+            s.psg.master_left = l;
+            s.psg.master_right = r;
+            stack.clear();
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    // lfo(freq, mode): channel 2 bends channel 1. mode 0 turns it off.
+    let st = state.clone();
+    set(
+        "lfo",
+        Callback::from_fn(&ctx, move |_, _, mut stack| {
+            let f = int(stack.get(0)).unwrap_or(0).clamp(0, 255) as u8;
+            let m = int(stack.get(1)).unwrap_or(1).clamp(0, 3) as u8;
+            st.borrow_mut().psg.lfo = crate::psg::Lfo { freq: f, mode: m };
+            stack.clear();
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
     // __line(y): the resolver marks which line its hooks are running on.
     let st = state.clone();
     set(
@@ -388,6 +562,7 @@ impl Engine {
             line_writes: vec![Vec::new(); MAX_HEIGHT],
             owner: vec![Owner::None; VRAM_WORDS],
             warnings: Vec::new(),
+            psg: Psg::default(),
         }));
         Engine {
             lua: Lua::core(),
@@ -395,7 +570,19 @@ impl Engine {
             init_fn: None,
             frame_fn: None,
             frame_file: None,
+            audio: Vec::new(),
+            audio_carry: 0.0,
         }
+    }
+
+    /// Interleaved stereo i16 samples at [`crate::SAMPLE_RATE`] for the most
+    /// recent `frame()`: about 735 frames' worth per 60 Hz frame.
+    pub fn audio(&self) -> &[i16] {
+        &self.audio
+    }
+
+    pub fn psg(&self) -> std::cell::Ref<'_, Psg> {
+        std::cell::Ref::map(self.state.borrow(), |s| &s.psg)
     }
 
     pub fn vdc(&self) -> std::cell::Ref<'_, Vdc> {
@@ -528,10 +715,16 @@ impl Engine {
                 }
             }
         });
-        let s = self.state.borrow();
+        let mut s = self.state.borrow_mut();
         for (line, writes) in frame.lines.iter_mut().zip(&s.line_writes) {
             line.palette_writes.clone_from(writes);
         }
+        // Sound for this frame, from the PSG registers as frame() left them.
+        let want = SAMPLES_PER_FRAME + self.audio_carry;
+        let n = want.floor();
+        self.audio_carry = want - n;
+        self.audio.clear();
+        s.psg.render(n as usize, &mut self.audio);
         Ok(frame)
     }
 

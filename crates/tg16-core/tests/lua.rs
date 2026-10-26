@@ -186,3 +186,51 @@ fn overlapping_vram_writes_warn() {
     let e = load(include_str!("../toys/sunset.lua"));
     assert!(e.warnings().is_empty(), "{:?}", e.warnings());
 }
+
+#[test]
+fn psg_plays_a_note() {
+    let mut e = load(
+        "function init() wave(1, 'square') end\n\
+         function frame(t, f) psg(1, {on = f < 2, note = 'A4', vol = 31}) end",
+    );
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.psg().channels[0].period, 254);
+    let a = e.audio().to_vec();
+    assert!(a.len() == 734 * 2 || a.len() == 735 * 2, "{}", a.len());
+    assert!(a.iter().any(|&s| s > 1000) && a.iter().any(|&s| s < -1000));
+    e.frame(0.0, 1).unwrap();
+    e.frame(0.0, 2).unwrap();
+    assert!(e.audio().iter().all(|&s| s == 0), "note off is silent");
+    // 60 frames make one second of audio.
+    let mut total = 0;
+    for f in 0..60 {
+        e.frame(0.0, f).unwrap();
+        total += e.audio().len() / 2;
+    }
+    assert_eq!(total, 44_100);
+}
+
+#[test]
+fn psg_argument_errors() {
+    let mut e = load("function frame() psg(7, {on = true}) end");
+    assert!(e.frame(0.0, 0).unwrap_err().message.contains("1..6"));
+    let mut e = load("function frame() psg(1, {noise = 10}) end");
+    assert!(e.frame(0.0, 0).unwrap_err().message.contains("5 and 6"));
+    let mut e = load("function frame() wave(1, 'kazoo') end");
+    assert!(e
+        .frame(0.0, 0)
+        .unwrap_err()
+        .message
+        .contains("unknown preset"));
+}
+
+#[test]
+fn note_names_and_numbers_agree() {
+    let mut e = load(
+        "function frame() psg(1, {note = 'C#3'}) psg(2, {note = 49}) psg(3, {note = 'Db3'}) end",
+    );
+    e.frame(0.0, 0).unwrap();
+    let p = e.psg();
+    assert_eq!(p.channels[0].period, p.channels[1].period);
+    assert_eq!(p.channels[0].period, p.channels[2].period);
+}

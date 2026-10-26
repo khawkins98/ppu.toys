@@ -22,3 +22,6 @@ pub const HEIGHT: usize = 224;
 
 mod lua;
 pub use lua::{Engine, LuaError};
+
+pub mod psg;
+pub use psg::{Psg, SAMPLE_RATE};
