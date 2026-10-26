@@ -10,6 +10,9 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
             [--loop seconds] [--allow-overflow]
   ppu render <dir|file.ppu.json> --at seconds,... -o <directory>
   ppu docs [topic|all]
+  ppu tg16 new <dir>
+  ppu tg16 render <dir|file.lua> --at seconds,... -o <directory>
+  ppu tg16 check <dir|file.lua> [--duration seconds] [--allow-overflow]
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
@@ -39,6 +42,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let command = args.remove(0);
+    if command == "tg16" {
+        return tg16(args);
+    }
     if command == "docs" {
         ensure!(args.len() <= 1, "usage: ppu docs [topic|all]");
         print!("{}", ppu_cli::docs(args.first().map(String::as_str))?);
@@ -103,6 +109,49 @@ fn main() -> Result<()> {
             ppu_cli::render(&input, &ppu_cli::parse_times(&times)?, Path::new(&output))?;
         }
         _ => bail!("unknown command {command:?}; use ppu --help"),
+    }
+    Ok(())
+}
+
+/// `ppu tg16 <new|render|check> ...`: TurboGrafx-16 toys (experimental).
+fn tg16(mut args: Vec<String>) -> Result<()> {
+    ensure!(
+        args.len() >= 2,
+        "usage: ppu tg16 <new|render|check> <path> ..."
+    );
+    let command = args.remove(0);
+    let input = PathBuf::from(args.remove(0));
+    match command.as_str() {
+        "new" => {
+            ensure!(args.is_empty(), "usage: ppu tg16 new <dir>");
+            ppu_cli::tg16::new_project(&input)?;
+            println!(
+                "Created {}. Edit main.lua, then run ppu tg16 render.",
+                input.display()
+            );
+        }
+        "render" => {
+            let times = option(&mut args, "--at")?.context("render requires --at seconds,...")?;
+            let output = option(&mut args, "-o")?.context("render requires -o <directory>")?;
+            ensure!(args.is_empty(), "unknown render arguments: {args:?}");
+            ppu_cli::tg16::render(&input, &ppu_cli::parse_times(&times)?, Path::new(&output))?;
+        }
+        "check" => {
+            let duration = option(&mut args, "--duration")?
+                .unwrap_or_else(|| "30".into())
+                .parse()
+                .context("invalid duration")?;
+            let allow_overflow = if let Some(i) = args.iter().position(|a| a == "--allow-overflow")
+            {
+                args.remove(i);
+                true
+            } else {
+                false
+            };
+            ensure!(args.is_empty(), "unknown check arguments: {args:?}");
+            ppu_cli::tg16::check(&input, duration, allow_overflow)?;
+        }
+        _ => bail!("unknown tg16 command {command:?}; use ppu --help"),
     }
     Ok(())
 }

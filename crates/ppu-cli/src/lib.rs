@@ -6,6 +6,7 @@ use std::path::Path;
 mod author;
 pub use author::*;
 mod docs;
+pub mod tg16;
 pub use docs::docs;
 
 const MANIFEST: &str = "ppu.json";

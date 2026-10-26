@@ -454,6 +454,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tg16-core",
 ]
 
 [[package]]
@@ -708,6 +709,8 @@ dependencies = [
 name = "tg16-core"
 version = "0.1.0"
 dependencies = [
+ "ahash",
+ "piccolo-ppu",
  "png",
 ]
 

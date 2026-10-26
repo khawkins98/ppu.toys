@@ -79,7 +79,7 @@ fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     Ok((info.width, info.height, rgba))
 }
 
-fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> {
+pub(crate) fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> {
     let mut encoder = png::Encoder::new(BufWriter::new(File::create(path)?), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

@@ -19,3 +19,6 @@ pub use vdc::{
 /// Default output size: 5.37 MHz dot clock, 224 visible lines.
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
+
+mod lua;
+pub use lua::{Engine, LuaError};

@@ -8,6 +8,9 @@ homepage.workspace = true
 description = "Emulated TurboGrafx-16 / PC Engine video (HuC6270 VDC, HuC6260 VCE) for ppu.toys"
 
 [dependencies]
+piccolo = { package = "piccolo-ppu", version = "0.3.4", path = "../../vendor/piccolo" }
+# Same pin as ppu-core: one getrandom 0.2 so wasm32 builds.
+ahash = "=0.8.11"
 
 [dev-dependencies]
 png = "0.17"
