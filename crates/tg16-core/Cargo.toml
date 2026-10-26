@@ -1,0 +1,13 @@
+[package]
+name = "tg16-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Emulated TurboGrafx-16 / PC Engine video (HuC6270 VDC, HuC6260 VCE) for ppu.toys"
+
+[dependencies]
+
+[dev-dependencies]
+png = "0.17"
