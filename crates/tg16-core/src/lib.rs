@@ -25,3 +25,6 @@ pub use lua::{Engine, LuaError};
 
 pub mod psg;
 pub use psg::{Psg, SAMPLE_RATE};
+
+pub mod budget;
+pub use budget::{Budget, CYCLES_PER_FRAME};

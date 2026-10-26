@@ -19,6 +19,7 @@ use crate::vce::{grb, rgb8, Vce};
 use crate::vdc::{BatEntry, BatSize, Sprite, Vdc, SPRITE_COUNT, VRAM_WORDS};
 
 const PRELUDE: &str = include_str!("prelude.lua");
+const KIT: &str = include_str!("kit.lua");
 
 /// A Lua compile or runtime error.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +71,9 @@ struct State {
     owner: Vec<Owner>,
     warnings: Vec<String>,
     psg: Psg,
+    /// True while `load()` runs, so setup VRAM writes are not charged.
+    loading: bool,
+    counts: crate::budget::Counts,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -130,6 +134,9 @@ pub struct Engine {
     frame_fn: Option<StashedFunction>,
     frame_file: Option<String>,
     audio: Vec<i16>,
+    /// Lines where a hook ran in the last frame.
+    touched: Vec<bool>,
+    budget: crate::budget::Budget,
     /// Fractional output samples carried between frames.
     audio_carry: f64,
 }
@@ -242,7 +249,11 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
             let addr = addr & (VRAM_WORDS - 1);
             match int(stack.get(1)) {
                 Some(w) => {
-                    st.borrow_mut().vdc.vram[addr] = w as u16;
+                    let mut s = st.borrow_mut();
+                    s.vdc.vram[addr] = w as u16;
+                    if !s.loading {
+                        s.counts.vram_words += 1;
+                    }
                     stack.clear();
                 }
                 None => {
@@ -264,6 +275,9 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
             let mut s = st.borrow_mut();
             let base = (n as usize & 0x7ff) * 16;
             s.claim(base..base + 16, Owner::Tile(n as u16 & 0x7ff));
+            if !s.loading {
+                s.counts.vram_words += 16;
+            }
             s.vdc.write_tile(n as u16, &px.try_into().unwrap());
             stack.clear();
             Ok(CallbackReturn::Return)
@@ -281,6 +295,9 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
             let mut s = st.borrow_mut();
             let base = (n as usize & 0x3ff) * 64;
             s.claim(base..base + 64, Owner::Pattern(n as u16 & 0x3ff));
+            if !s.loading {
+                s.counts.vram_words += 64;
+            }
             s.vdc.write_pattern(n as u16, &px.try_into().unwrap());
             stack.clear();
             Ok(CallbackReturn::Return)
@@ -308,6 +325,9 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
             let mut s = st.borrow_mut();
             let w = ty * size.width as usize + tx;
             s.claim(w..w + 1, Owner::Map);
+            if !s.loading {
+                s.counts.vram_words += 1;
+            }
             s.vdc.set_bat(size, tx as u16, ty as u16, e);
             stack.clear();
             Ok(CallbackReturn::Return)
@@ -320,10 +340,17 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
     set(
         "color",
         Callback::from_fn(&ctx, move |ctx, _, mut stack| {
-            let (Some(i), Some(c)) = (int(stack.get(0)), int(stack.get(1))) else {
+            let Some(i) = int(stack.get(0)) else {
                 return Err(err(ctx, "color(entry, value)"));
             };
             let mut s = st.borrow_mut();
+            let Some(c) = int(stack.get(1)) else {
+                // color(entry) reads the frame's starting value.
+                let v = s.vce.colors[(i & 511) as usize];
+                stack.replace(ctx, v as i64);
+                return Ok(CallbackReturn::Return);
+            };
+            s.counts.palette_writes += 1;
             match s.line {
                 Some(y) => s.line_writes[y].push(((i & 511) as u16, (c & 0x1ff) as u16)),
                 None => s.vce.set(i as usize, c as u16),
@@ -374,7 +401,9 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
                 s.flip_x = truthy(o.get(ctx, "flip_x"));
                 s.flip_y = truthy(o.get(ctx, "flip_y"));
             }
-            st.borrow_mut().vdc.set_sprite(i as usize, s);
+            let mut st = st.borrow_mut();
+            st.vdc.set_sprite(i as usize, s);
+            st.counts.sprites += 1;
             stack.clear();
             Ok(CallbackReturn::Return)
         }),
@@ -446,6 +475,14 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
                 ));
             };
             let mut s = st.borrow_mut();
+            // Charge one register write per field given.
+            let mut fields = 0;
+            let mut k = Value::Nil;
+            while let piccolo::table::NextValue::Found { key, .. } = o.next(k) {
+                fields += 1;
+                k = key;
+            }
+            s.counts.psg_writes += fields;
             let c = &mut s.psg.channels[ch];
             let get = |k: &'static str| o.get(ctx, k);
             if !matches!(get("on"), Value::Nil) {
@@ -563,6 +600,8 @@ impl Engine {
             owner: vec![Owner::None; VRAM_WORDS],
             warnings: Vec::new(),
             psg: Psg::default(),
+            loading: false,
+            counts: Default::default(),
         }));
         Engine {
             lua: Lua::core(),
@@ -571,8 +610,15 @@ impl Engine {
             frame_fn: None,
             frame_file: None,
             audio: Vec::new(),
+            touched: vec![false; MAX_HEIGHT],
+            budget: Default::default(),
             audio_carry: 0.0,
         }
+    }
+
+    /// The cost meter for the most recent `render()`.
+    pub fn budget(&self) -> crate::budget::Budget {
+        self.budget
     }
 
     /// Interleaved stereo i16 samples at [`crate::SAMPLE_RATE`] for the most
@@ -633,8 +679,17 @@ impl Engine {
     pub fn load(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         *self = Engine::new();
         let state = self.state.clone();
+        state.borrow_mut().loading = true;
+        let r = self.load_inner(files);
+        state.borrow_mut().loading = false;
+        r
+    }
+
+    fn load_inner(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let state = self.state.clone();
         self.lua.enter(|ctx| install(ctx, &state));
         self.run_chunk("prelude", PRELUDE)?;
+        self.run_chunk("kit", KIT)?;
         for (name, src) in files {
             self.run_chunk(name, src)?;
         }
@@ -667,6 +722,7 @@ impl Engine {
             s.vdc.sat = [0; SPRITE_COUNT * 4];
             s.line_writes.iter_mut().for_each(Vec::clear);
             s.line = None;
+            s.counts = Default::default();
         }
         self.lua.enter(|ctx| {
             ctx.set_global("__hooks", Table::new(&ctx)).unwrap();
@@ -702,16 +758,18 @@ impl Engine {
 
         let mut frame = Frame::new(width, height, LineRegs::default());
         frame.bat = bat;
+        self.touched.iter_mut().for_each(|t| *t = false);
         self.lua.enter(|ctx| {
             frame.scroll_y = int(ctx.get_global("__frame_y")).unwrap_or(0) as u16;
             if let Value::Table(t) = ctx.get_global("__lines") {
                 for (y, line) in frame.lines.iter_mut().enumerate() {
-                    let at = |k: usize| int(t.get(ctx, (y * 4 + k + 1) as i64)).unwrap_or(0);
+                    let at = |k: usize| int(t.get(ctx, (y * 5 + k + 1) as i64)).unwrap_or(0);
                     line.scroll_x = at(0) as u16;
                     let reload = at(1);
                     line.scroll_y_write = (reload >= 0).then_some(reload as u16);
                     line.bg_on = at(2) != 0;
                     line.sprites_on = at(3) != 0;
+                    self.touched[y] = at(4) != 0;
                 }
             }
         });
@@ -732,6 +790,9 @@ impl Engine {
     pub fn render(&mut self, t: f64, f: u32) -> Result<Output, LuaError> {
         let frame = self.frame(t, f)?;
         let s = self.state.borrow();
-        Ok(render(&s.vdc, &s.vce, &frame))
+        let out = render(&s.vdc, &s.vce, &frame);
+        self.budget =
+            crate::budget::Budget::measure(&frame, &self.touched[..frame.height], s.counts, &out);
+        Ok(out)
     }
 }

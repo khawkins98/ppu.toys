@@ -234,3 +234,125 @@ fn note_names_and_numbers_agree() {
     assert_eq!(p.channels[0].period, p.channels[1].period);
     assert_eq!(p.channels[0].period, p.channels[2].period);
 }
+
+fn render_toy(src: &str, name: &str, t: f64) -> (Output, Budget, Vec<String>) {
+    let mut e = Engine::new();
+    e.load(&[(name, src)]).unwrap_or_else(|e| panic!("{e}"));
+    let o = e
+        .render(t, (t * 60.0) as u32)
+        .unwrap_or_else(|e| panic!("{e}"));
+    (o, e.budget(), e.warnings())
+}
+
+#[test]
+fn budget_counts_raster_and_sprite_work() {
+    let (_, b, _) = render_toy("function frame() end", "main.lua", 0.0);
+    assert_eq!(b.raster_lines, 0);
+    assert_eq!(b.cycles, tg16_core::budget::cost::FRAME_BASE);
+
+    let src = "function frame()\n  spr(0, 0, 0, 64)\n  hdma(10, 19, function(y) bg.scroll.x = y end)\nend";
+    let (_, b, _) = render_toy(src, "main.lua", 0.0);
+    assert_eq!(b.raster_lines, 10);
+    assert_eq!(b.sprites, 1);
+    // Scroll changes on lines 10..19 and back to 0 on line 20.
+    assert_eq!(b.vdc_writes, 11);
+    assert!(b.problems().is_empty());
+}
+
+#[test]
+fn budget_flags_vram_floods_and_cpu_overruns() {
+    // Rewriting 128 tiles every frame is more than vertical blank allows.
+    let src = "function frame()\n  for i = 0, 127 do tile(256 + i, string.rep('1', 64)) end\nend";
+    let (_, b, _) = render_toy(src, "main.lua", 0.0);
+    assert_eq!(b.vram_words, 128 * 16);
+    assert!(
+        b.problems().iter().any(|p| p.contains("VRAM words")),
+        "{:?}",
+        b.problems()
+    );
+    // Init-time uploads are free.
+    let src = "for i = 0, 127 do tile(256 + i, string.rep('1', 64)) end";
+    let (_, b, _) = render_toy(src, "main.lua", 0.0);
+    assert_eq!(b.vram_words, 0);
+    // Palette writes on every line of every... 224 lines x 30 writes is too much.
+    let src =
+        "function frame()\n  hdma(0, 223, function(y) for i = 1, 30 do color(i, y) end end)\nend";
+    let (_, b, _) = render_toy(src, "main.lua", 0.0);
+    assert!(b.cycles > CYCLES_PER_FRAME, "{}", b.cycles);
+    assert!(b.problems().iter().any(|p| p.contains("CPU")));
+}
+
+#[test]
+fn kit_mask_lines_restores_backdrop() {
+    let src = "function init() color(0, rgb3(0, 0, 7)) end\n\
+               function frame() kit.mask_lines(10, 19, rgb3(0, 0, 0)) end";
+    let (o, _, _) = render_toy(src, "main.lua", 0.0);
+    assert_eq!(px(&o, 0, 9), BLUE);
+    assert_eq!(px(&o, 0, 10), [0, 0, 0]);
+    assert_eq!(px(&o, 0, 19), [0, 0, 0]);
+    assert_eq!(px(&o, 0, 20), BLUE);
+}
+
+#[test]
+fn kit_parallax_sets_band_scrolls() {
+    let mut e =
+        load("function frame() kit.parallax(100, {{0, 9, 0.5}, {10, 19, 1}, {20, 29, 0, 1}}) end");
+    let f = e.frame(0.0, 0).unwrap();
+    assert_eq!(f.lines[5].scroll_x, 50);
+    assert_eq!(f.lines[15].scroll_x, 100);
+    assert_eq!(f.lines[20].scroll_x, 0);
+    assert_eq!(f.lines[29].scroll_x, 100);
+    assert_eq!(f.lines[30].scroll_x, 0);
+}
+
+#[test]
+fn kit_sprite_layer_and_flicker() {
+    let mut e = load(
+        "function frame(t, f)\n\
+           local n = kit.sprite_layer({first = 0, count = 4, pattern = 64, spacing = 80, y = 10, x = 20})\n\
+           kit.flicker_spr(f, n, 0, 100, 64)\n\
+         end",
+    );
+    e.frame(0.0, 0).unwrap();
+    {
+        let v = e.vdc();
+        assert_eq!(v.sprite(0).x, -20);
+        assert_eq!(v.sprite(1).x, 60);
+        assert_eq!(v.sprite(4).y, 100, "flicker sprite drawn on even frames");
+    }
+    e.frame(0.0, 1).unwrap();
+    assert_ne!(e.vdc().sprite(4).y, 100, "and hidden on odd frames");
+}
+
+const KIT_DEMO: &str = include_str!("../toys/kit_demo.lua");
+const KIT_GOLDEN: &str = "tests/fixtures/golden_kit_demo.png";
+
+#[test]
+fn kit_demo_matches_golden_and_fits_the_budget() {
+    let (o, b, w) = render_toy(KIT_DEMO, "kit_demo.lua", 2.0);
+    assert!(w.is_empty(), "{w:?}");
+    assert!(b.problems().is_empty(), "{:?}", b.problems());
+    assert!(
+        b.raster_lines >= 150,
+        "the floor and bands are raster-heavy"
+    );
+    assert_eq!(
+        o.rgba,
+        decode_png(KIT_GOLDEN),
+        "kit demo differs from golden PNG"
+    );
+}
+
+#[test]
+#[ignore = "regenerates the committed golden PNG"]
+fn regen_kit_golden() {
+    let (o, _, _) = render_toy(KIT_DEMO, "kit_demo.lua", 2.0);
+    let file = std::fs::File::create(KIT_GOLDEN).unwrap();
+    let mut enc = png::Encoder::new(file, o.width as u32, o.height as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .unwrap()
+        .write_image_data(&o.rgba)
+        .unwrap();
+}

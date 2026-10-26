@@ -77,6 +77,13 @@ in raster interrupts and VRAM updates.
 - `kit.flicker_alpha(...)`: transparency by alternating frames.
 - `kit.mask(...)`: window-like masks using sprite edges or palette swaps.
 
+## Progress
+
+Phases 1 to 4 are built on the `tg16-core` branch: the renderer, Lua
+bindings, `ppu tg16 new/render/check/audio`, PSG audio, the kit helpers and the
+budget meter. See [GUIDE.md](GUIDE.md) for the authoring guide. Still to do: PNG
+importers, `ppu tg16 pack`, phase 5 (WASM and a browser viewer).
+
 ## Phases
 
 1. **Core video renderer** (this branch, started): VDC + VCE model, renderer,

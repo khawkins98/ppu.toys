@@ -68,8 +68,9 @@ function hdma(y0, y1, fn)
 end
 raster = hdma
 
--- Called by the engine after frame(). Writes 4 numbers per line into
--- __lines: scroll x, BYR reload (-1 for none), bg on, sprites on.
+-- Called by the engine after frame().
+-- Writes 5 numbers per line into __lines: scroll x, BYR reload (-1 for
+-- none), bg on, sprites on, and whether a hook ran on the line.
 function __resolve(h)
   local bx, by = scroll_vals.x, scroll_vals.y
   local sbg, sspr = show.bg, show.sprites
@@ -108,6 +109,7 @@ function __resolve(h)
     out[n + 2] = reload
     out[n + 3] = show.bg and 1 or 0
     out[n + 4] = show.sprites and 1 or 0
+    out[n + 5] = touched and 1 or 0
   end
   in_hook = false
   __line(-1)

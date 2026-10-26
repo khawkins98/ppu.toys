@@ -74,33 +74,64 @@ pub fn render(path: &Path, frames: &[u32], out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Play `duration` seconds, failing on Lua errors, and report the sprite load.
+/// Play `duration` seconds, failing on Lua errors, and report the sprite
+/// load and the estimated CPU and VRAM cost against the console's limits.
 pub fn check(path: &Path, duration: f64, allow_overflow: bool) -> Result<()> {
     let end = crate::frame_number(duration)?;
     ensure!(end > 0, "duration must be at least one frame");
     let mut e = engine(path)?;
-    let (mut busiest, mut busiest_at, mut overflow_frames) = (0u8, 0u32, Vec::new());
+    let mut peak = tg16_core::Budget::default();
+    let (mut peak_cpu_at, mut overflow_frames, mut over_budget) = (0u32, Vec::new(), Vec::new());
     for f in 0..=end {
         let o = e
             .render(f64::from(f) / 60.0, f)
             .map_err(|err| anyhow::anyhow!("frame {f}: {err}"))?;
-        let peak = o.lines.iter().map(|l| l.units).max().unwrap_or(0);
-        if peak > busiest {
-            busiest = peak;
-            busiest_at = f;
+        let b = e.budget();
+        if b.cycles > peak.cycles {
+            peak.cycles = b.cycles;
+            peak_cpu_at = f;
         }
+        peak.peak_line_units = peak.peak_line_units.max(b.peak_line_units);
+        peak.vram_words = peak.vram_words.max(b.vram_words);
+        peak.raster_lines = peak.raster_lines.max(b.raster_lines);
+        peak.sprites = peak.sprites.max(b.sprites);
         if o.overflow() {
             overflow_frames.push(f);
         }
+        let problems: Vec<_> = b
+            .problems()
+            .into_iter()
+            .filter(|p| !p.starts_with("sprites dropped"))
+            .collect();
+        if !problems.is_empty() {
+            over_budget.push((f, problems));
+        }
     }
-    let warnings = e.warnings();
-    for w in &warnings {
+    for w in e.warnings() {
         eprintln!("warning: {w}");
     }
+    println!("ok: {} frames played", end + 1);
     println!(
-        "ok: {} frames, busiest line wants {busiest}/16 sprite units (frame {busiest_at})",
-        end + 1
+        "  CPU (estimate): peak {:.0}% of a frame at frame {peak_cpu_at}",
+        peak.cpu_share() * 100.0
     );
+    println!("  raster lines:   up to {} per frame", peak.raster_lines);
+    println!(
+        "  sprites:        up to {}/64, busiest line {}/16 units",
+        peak.sprites, peak.peak_line_units
+    );
+    println!(
+        "  VRAM per frame: up to {} words (about {} fit in vertical blank)",
+        peak.vram_words,
+        tg16_core::budget::VBLANK_VRAM_WORDS
+    );
+    if let Some((f, problems)) = over_budget.first() {
+        eprintln!(
+            "warning: over budget on {} frames; first at frame {f}: {}",
+            over_budget.len(),
+            problems.join("; ")
+        );
+    }
     if !overflow_frames.is_empty() {
         let msg = format!(
             "sprite line limit exceeded on {} frames, first at frame {}",

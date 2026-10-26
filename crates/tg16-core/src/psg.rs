@@ -147,6 +147,7 @@ impl Psg {
     }
 
     /// Render `n` stereo frames, appending interleaved L/R i16 to `out`.
+    #[allow(clippy::needless_range_loop)] // ch indexes several per-channel arrays
     pub fn render(&mut self, n: usize, out: &mut Vec<i16>) {
         let ticks = PSG_CLOCK / SAMPLE_RATE as f64;
         let master_l = (15 - self.master_left.min(15)) as f64 * 3.0;

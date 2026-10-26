@@ -71,12 +71,13 @@ function frame(t, f)
   spr(2, 200, 150, 64, { w = 32, h = 32, pal = 2, flip_y = true })
 
   bg.scroll.x = floor(t * 20)
-  hdma(0, 127, function(y)
-    if y % 16 == 0 then
-      local b = floor(y / 16)
+  -- One raster line per band, not 128: a hook only costs CPU on the lines
+  -- it covers.
+  for b = 0, 7 do
+    hdma(b * 16, b * 16, function()
       color(0, rgb3(floor(b / 2), floor(b / 2) + 1, 7 - floor(b / 3)))
-    end
-  end)
+    end)
+  end
   hdma(176, 223, function(y)
     bg.scroll.x = floor(t * 60) + (y - 176) * 2
   end)
