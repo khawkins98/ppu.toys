@@ -61,7 +61,7 @@ machine's numbers: for the TG16 the budget meter; for the SNES what
 and time overflow, S-DSP voices sounding, Mode 7 lines, the echo buffer's
 share of sound RAM, and VRAM claimed by `dma()`).
 
-The picker has three groups:
+The picker has four groups:
 
 - **Close ports**: the TG16 example toys and their hand-written SNES ports in
   `compare/snes/<name>/` (sunset, kit_demo, photo, and the game fernwick,
@@ -73,6 +73,12 @@ The picker has three groups:
   `ppu tg16 convert` output on the right, with the converter's `CONVERT.md`
   notes below.
 - **TG16 only**: any example toy with no `compare/snes/<name>` port yet.
+- **TG16 strengths (and limits)**: pairs written to test where the TG16 is
+  said to beat the SNES (CPU speed, palettes, per-line colour), each side
+  done the best way its hardware allows; `strengths.js` holds their captions
+  and the extra rows under each screen (each SNES toy's own estimate from
+  `sram.meter`, and a live count of unique colours). Two of the four show
+  where the claim does not hold up.
 
 `?toy=<name>` opens a toy directly. `build.sh` makes everything the page
 loads, none of it committed:

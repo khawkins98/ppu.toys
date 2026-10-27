@@ -56,3 +56,48 @@ end
     .unwrap();
     e.frame(0., 0).unwrap();
 }
+
+#[test]
+fn parameters_a_caller_leaves_out_are_nil_not_stale_registers() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        r##"
+local function second(a, b) return b end
+local function third(a, b, c) return c end
+local function va(a, b, ...) return b, select("#", ...) end
+local mt = { __index = function(t, k, extra) return extra end }
+function frame()
+  -- Fill registers above the call with live values first.
+  local t = {1, 2, 3}
+  local n = 2
+  assert(second(t[1]) == nil)
+  assert(second("A " .. n .. " B") == nil)
+  assert(third(t[1], t[2]) == nil)
+  -- A call whose result is kept in a register.
+  local x = second(t[3])
+  assert(x == nil)
+  -- Fixed parameters before varargs.
+  local b, count = va(t[1])
+  assert(b == nil and count == 0)
+  -- A generic-for iterator gets two arguments; a third parameter is nil,
+  -- even with live locals in the loop body above the call.
+  local seen = 0
+  local function iter(s, c, extra)
+    assert(extra == nil)
+    if c < 3 then return c + 1 end
+  end
+  for i in iter, nil, 0 do
+    local p, q, r = "x", {}, i * 2
+    seen = seen + 1
+  end
+  assert(seen == 3)
+  -- A metamethod called with fewer arguments than it declares.
+  assert(setmetatable({}, mt).missing == nil)
+end
+"##,
+    )
+    .unwrap();
+    for f in 0..3 {
+        e.frame(f64::from(f) / 60., f).unwrap();
+    }
+}

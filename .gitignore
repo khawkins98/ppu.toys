@@ -1,3 +1,4 @@
 /target
 /.cook
 /viewer/tg16/pkg/
+__pycache__/

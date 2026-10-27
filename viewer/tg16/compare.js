@@ -3,6 +3,7 @@
 // build.sh makes both wasm modules and every pack this page loads.
 import initTg16, { Tg16 } from './pkg/tg16_core.js';
 import initSnes, { PpuCore } from './pkg/snes/ppu_core.js';
+import { STRENGTHS, strengthAbout, strengthStats } from './strengths.js';
 
 const FPS = 60;
 const STEP_MS = 1000 / FPS;
@@ -90,6 +91,8 @@ const TOYS = [
     notesUrl: `pkg/convert/${id}.md`,
   })),
 ];
+// The TG16 strengths group (strengths.js).
+TOYS.push(...STRENGTHS);
 
 // ---------------------------------------------------------------- state
 
@@ -308,7 +311,9 @@ function markdown(text) {
 
 async function showAbout(t) {
   const el = $('about');
-  if (!t.snesUrl) {
+  if (t.strength) {
+    el.innerHTML = strengthAbout(t);
+  } else if (!t.snesUrl) {
     el.innerHTML = `<h2>${esc(t.label)}: TG16 only</h2><p>A TurboGrafx-16 toy with no SNES port yet (<code>crates/tg16-core/toys/${esc(t.id)}</code>). Add one as <code>compare/snes/${esc(t.id)}/</code> and it moves to the close ports.</p>`;
   } else if (t.notesUrl) {
     el.innerHTML = `<h2>${esc(t.label)}: automatic conversion</h2><p>Left: the bundled SNES example as written. Right: <code>ppu tg16 convert</code> run on it at build time, unedited. The converter's notes:</p><div id="notes">loading…</div>`;
@@ -385,6 +390,7 @@ function bar(id, frac) {
 let statTick = 0;
 function showStats(force) {
   if (!force && ++statTick % 6) return;
+  strengthStats(toy, snes, tg);
   if (snes?.core && !snes.failed) {
     try {
       const ov = snes.core.objOverflow();
