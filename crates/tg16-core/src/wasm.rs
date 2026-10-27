@@ -8,13 +8,9 @@ use crate::{Engine, LuaError, HEIGHT, WIDTH};
 
 /// An image added before `load()`, waiting for the engine to take it.
 struct PendingImage {
-    #[allow(dead_code)]
     name: String,
-    #[allow(dead_code)]
     width: u32,
-    #[allow(dead_code)]
     height: u32,
-    #[allow(dead_code)]
     rgba: Vec<u8>,
 }
 
@@ -110,12 +106,12 @@ impl Tg16 {
             .iter()
             .map(|(n, s)| (n.as_str(), s.as_str()))
             .collect();
-        // TODO(importers): forward to Engine::add_image before load(). Engine::load
-        // resets the machine (`*self = Engine::new()`), so images must survive
-        // that reset, e.g.:
-        //     for i in &self.images {
-        //         self.engine.add_image(&i.name, i.width, i.height, i.rgba.clone());
-        //     }
+        // A fresh engine so images cleared with clear_images() are gone too.
+        self.engine = Engine::new();
+        for i in &self.images {
+            self.engine
+                .add_image(&i.name, i.width, i.height, i.rgba.clone());
+        }
         self.engine.load(&pairs).map_err(lua_error)?;
         self.width = WIDTH;
         self.height = HEIGHT;

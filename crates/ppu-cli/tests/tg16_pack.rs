@@ -100,6 +100,8 @@ fn round_trip_dir_pack_unpack() {
 fn pack_renders_like_the_directory() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_toy(tmp.path());
+    // Rendering decodes every asset, so drop the not-really-a-PNG one.
+    std::fs::remove_file(dir.join("assets/raw.png")).unwrap();
     let pack = tmp.path().join("demo.tg16.json");
     std::fs::write(&pack, ppu_cli::tg16::pack(&dir).unwrap()).unwrap();
     let (from_dir, from_pack) = (tmp.path().join("a"), tmp.path().join("b"));
@@ -234,4 +236,57 @@ fn new_creates_assets_dir_and_packs() {
         .unwrap();
     assert!(output.status.success());
     assert!(tmp.path().join("fresh.tg16.json").is_file());
+}
+
+#[test]
+fn broken_png_asset_is_a_render_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_toy(tmp.path());
+    let out = run(&[
+        "tg16",
+        "render",
+        dir.to_str().unwrap(),
+        "--at",
+        "0",
+        "-o",
+        tmp.path().join("o").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("assets/raw.png"));
+}
+
+#[test]
+fn pack_carries_images_into_the_engine() {
+    // A 16x8 image: left tile red, right tile blue. image_bg puts it at map 0,0.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("img");
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    let rgba: Vec<u8> = (0..16 * 8)
+        .flat_map(|i| {
+            if i % 16 < 8 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        })
+        .collect();
+    std::fs::write(dir.join("assets/two.png"), png_bytes(16, 8, &rgba)).unwrap();
+    std::fs::write(
+        dir.join("main.lua"),
+        "function init() image_bg('two') end\n",
+    )
+    .unwrap();
+    let pack = tmp.path().join("img.tg16.json");
+    success(&[
+        "tg16",
+        "pack",
+        dir.to_str().unwrap(),
+        "-o",
+        pack.to_str().unwrap(),
+    ]);
+    let toy = load_toy(&pack).unwrap();
+    let mut e = ppu_cli::tg16::engine_from_toy(&toy).unwrap();
+    let o = e.render(0.0, 0).unwrap();
+    assert_eq!(&o.rgba[0..3], &[255, 0, 0]);
+    assert_eq!(&o.rgba[8 * 4..8 * 4 + 3], &[0, 0, 255]);
 }

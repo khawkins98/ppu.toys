@@ -105,6 +105,60 @@ Six channels (1..6), each playing a 32-step waveform of 0..31 values.
 
 Sound registers are read once per frame, after `frame()` returns.
 
+## Images
+
+Put PNGs in the toy directory's `assets/` folder and import them by file
+stem: `assets/hills.png` is `"hills"`. Any PNG works (palette, gray, RGB,
+RGBA). Colors are rounded to the 9-bit palette; pixels with alpha below 128
+are transparent (color 0). The importers never drop colors: if an image does
+not fit, the error says why (which tile has too many colors, how many palettes
+it needs, how many tiles).
+
+```lua
+function init()
+  bat.w = 64                       -- set the map size first
+  local bg = image_bg("hills", { x = 0, y = 4 })
+  -- bg.tiles, bg.palettes, bg.w, bg.h (in tiles), bg.tile, bg.pal
+  hero = image_sprites("hero", { w = 32, h = 32 })
+  -- hero.patterns, hero.palettes, hero.frames, hero.pattern, hero.step, hero.pal, hero.pals
+end
+
+function frame(t, f)
+  local k = f // 8 % hero.frames   -- frame k, counted from 0
+  spr(0, 100, 120, hero.pattern + k * hero.step, { w = 32, h = 32, pal = hero.pals[k + 1] })
+end
+```
+
+`image_bg(name, opts)` cuts the image (a multiple of 8 pixels each way) into
+8x8 tiles, gives each tile one of up to 16 palettes of 15 colors, stores
+identical tiles once (the BAT has no flip bits, so only exact repeats share),
+and writes the tiles to VRAM, the palettes to the VCE and the map into the
+BAT. Options, all optional:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `x`, `y` | 0 | map cell of the image's top-left corner (wraps around the BAT) |
+| `tile` | first free run above the BAT | first tile number |
+| `pal` | lowest background palette nothing has set yet | first palette |
+| `pals` | `16 - pal` | most palettes it may use |
+
+The image must fit in `bat.w` x `bat.h` tiles.
+
+`image_sprites(name, opts)` cuts a sheet into frames of `w` x `h` pixels
+(default 16x16; `w` 16 or 32, `h` 16, 32 or 64), read left to right, top to
+bottom, and writes each frame's 16x16 patterns in the order a sprite of that
+size reads them. Frame `k` starts at pattern `pattern + k * step`. All cells
+of a frame share one palette; `pals[k + 1]` is frame `k`'s palette (with one
+palette they are all `pal`). Options: `pattern` (default: the first free run
+above the BAT, aligned for the frame size), `pal` (lowest sprite palette not
+yet set), `pals` (default `16 - pal`), `w`, `h`.
+
+Defaults never overlap each other or anything `tile()`, `pattern()` and
+`map()` wrote earlier, and palettes that `pal()`/`spal()` set are skipped.
+Explicit numbers that overlap get the usual VRAM or palette warning. Imports
+in `init()` are free in the budget meter; in `frame()` they count as VRAM
+uploads.
+
 ## Kit helpers
 
 All are plain Lua in `crates/tg16-core/src/kit.lua`; read it to see the trick.
@@ -163,5 +217,6 @@ directory, and the browser viewer loads the same file.
 
 ## Not modelled yet
 
-SuperGrafx, CD audio, the HuC6280 CPU itself, ROM export, PNG importers, the
-interrupt timing of mid-line writes, and the exact first-line BYR offset.
+SuperGrafx, CD audio, the HuC6280 CPU itself, ROM export, color reduction or
+dithering in the image importers, the interrupt timing of mid-line writes, and
+the exact first-line BYR offset.

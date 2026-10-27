@@ -13,6 +13,7 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
+use crate::import::{import_bg, import_sprites, Image};
 use crate::psg::{period_for_hz, preset_wave, Psg, CHANNELS, SAMPLES_PER_FRAME};
 use crate::render::{render, Frame, LineRegs, Output, MAX_HEIGHT, MAX_WIDTH};
 use crate::vce::{grb, rgb8, Vce};
@@ -74,6 +75,12 @@ struct State {
     /// True while `load()` runs, so setup VRAM writes are not charged.
     loading: bool,
     counts: crate::budget::Counts,
+    /// Images registered with `Engine::add_image`; they survive `load()`.
+    images: std::collections::BTreeMap<String, Image>,
+    /// Background and sprite palettes something has written colors 1..15 of,
+    /// one bit each, so image imports pick free ones and warn on clashes.
+    bg_pals_used: u16,
+    spr_pals_used: u16,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,6 +131,292 @@ impl State {
             }
         }
     }
+
+    fn warn(&mut self, msg: String) {
+        if self.warnings.len() < 20 && !self.warnings.contains(&msg) {
+            self.warnings.push(msg);
+        }
+    }
+
+    /// Lowest `align`-aligned run of `count` units of `unit` words, starting
+    /// at or after word `start`, that nothing has written yet.
+    fn find_free(&self, start: usize, unit: usize, count: usize, align: usize) -> Option<usize> {
+        let mut u = start.div_ceil(unit).next_multiple_of(align);
+        while (u + count) * unit <= VRAM_WORDS {
+            let words = u * unit..(u + count) * unit;
+            match self.owner[words.clone()]
+                .iter()
+                .rposition(|o| *o != Owner::None)
+            {
+                None => return Some(u),
+                // Skip past the last used word in the run.
+                Some(i) => u = (words.start + i + 1).div_ceil(unit).next_multiple_of(align),
+            }
+        }
+        None
+    }
+
+    fn image(&self, func: &str, name: &str) -> Result<&Image, String> {
+        let img = self.images.get(name).ok_or_else(|| {
+            if self.images.is_empty() {
+                format!(
+                    "{func}: no image named {name:?}; no images are loaded (put PNGs in the \
+                     toy's assets/ directory)"
+                )
+            } else {
+                let known: Vec<_> = self.images.keys().map(|k| format!("{k:?}")).collect();
+                format!(
+                    "{func}: no image named {name:?}; known images: {}",
+                    known.join(", ")
+                )
+            }
+        })?;
+        if img.rgba.len() != img.width as usize * img.height as usize * 4 {
+            return Err(format!(
+                "{func}({name:?}): {}x{} image has {} RGBA bytes, expected {}",
+                img.width,
+                img.height,
+                img.rgba.len(),
+                img.width as usize * img.height as usize * 4
+            ));
+        }
+        Ok(img)
+    }
+
+    /// Write `palettes` (colors 1..15 of each) at palette `first` of the
+    /// background (`base` 0) or sprite (`base` 256) half of the VCE.
+    fn write_palettes(&mut self, func: &str, base: usize, first: usize, palettes: &[[u16; 16]]) {
+        let sprite = base != 0;
+        for (i, p) in palettes.iter().enumerate() {
+            let n = first + i;
+            let used = if sprite {
+                &mut self.spr_pals_used
+            } else {
+                &mut self.bg_pals_used
+            };
+            let was_used = *used & (1 << n) != 0;
+            *used |= 1 << n;
+            if was_used {
+                self.warn(format!(
+                    "{func}: overwrites {} palette {n}, which was already set; pass pal = N to \
+                     use another",
+                    if sprite { "sprite" } else { "background" }
+                ));
+            }
+            for (c, &color) in p.iter().enumerate().skip(1) {
+                self.vce.set(base + n * 16 + c, color);
+            }
+            self.counts.palette_writes += 15;
+        }
+    }
+}
+
+/// Integer option `key` of an optional table.
+fn opt<'gc>(
+    ctx: piccolo::Context<'gc>,
+    o: Option<Table<'gc>>,
+    key: &'static str,
+) -> Result<Option<i64>, String> {
+    let Some(t) = o else { return Ok(None) };
+    match t.get(ctx, key) {
+        Value::Nil => Ok(None),
+        v => int(v)
+            .map(Some)
+            .ok_or_else(|| format!("option {key} must be a number")),
+    }
+}
+
+/// `(name, opts)` arguments of the image functions.
+fn image_args<'gc>(
+    ctx: piccolo::Context<'gc>,
+    stack: &piccolo::Stack<'gc, '_>,
+    func: &str,
+) -> Result<(String, Option<Table<'gc>>), piccolo::Error<'gc>> {
+    let Value::String(name) = stack.get(0) else {
+        return Err(err(
+            ctx,
+            &format!("{func}(name, opts): name must be a string"),
+        ));
+    };
+    let opts = match stack.get(1) {
+        Value::Nil => None,
+        Value::Table(t) => Some(t),
+        _ => {
+            return Err(err(
+                ctx,
+                &format!("{func}(name, opts): opts must be a table"),
+            ))
+        }
+    };
+    Ok((name.to_str_lossy().into_owned(), opts))
+}
+
+/// Lowest palette not marked in `used`, or 0 when all are.
+fn free_palette(used: u16) -> i64 {
+    (0..16).find(|p| used & (1 << p) == 0).unwrap_or(0)
+}
+
+const MAX_TILES: usize = VRAM_WORDS / 16;
+const MAX_PATTERNS: usize = VRAM_WORDS / 64;
+
+/// `image_bg(name, {tile, pal, pals, x, y})`.
+fn image_bg_call<'gc>(
+    ctx: piccolo::Context<'gc>,
+    st: &RefCell<State>,
+    name: &str,
+    o: Option<Table<'gc>>,
+) -> Result<Table<'gc>, String> {
+    let size = bat_size(ctx);
+    let mut s = st.borrow_mut();
+    let func = format!("image_bg({name:?})");
+    let img = s.image("image_bg", name)?;
+    let e = |m: String| format!("{func}: {m}");
+    let tile = opt(ctx, o, "tile").map_err(e)?;
+    let pal = match opt(ctx, o, "pal").map_err(e)? {
+        Some(p) => p,
+        None => free_palette(s.bg_pals_used),
+    };
+    if !(0..16).contains(&pal) {
+        return Err(e("pal must be 0..15".into()));
+    }
+    let pals = opt(ctx, o, "pals").map_err(e)?.unwrap_or(16 - pal);
+    if !(1..=16 - pal).contains(&pals) {
+        return Err(e(format!("pals must be 1..{} when pal is {pal}", 16 - pal)));
+    }
+    let x = opt(ctx, o, "x").map_err(e)?.unwrap_or(0);
+    let y = opt(ctx, o, "y").map_err(e)?.unwrap_or(0);
+    let max_tiles = match tile {
+        Some(t) if !(0..MAX_TILES as i64).contains(&t) => {
+            return Err(e(format!("tile must be 0..{}", MAX_TILES - 1)))
+        }
+        Some(t) => MAX_TILES - t as usize,
+        None => MAX_TILES - size.first_free_tile() as usize,
+    };
+    let imp = import_bg(img, pals as usize, max_tiles).map_err(|m| e(m.to_string()))?;
+    if imp.width > size.width as usize || imp.height > size.height as usize {
+        return Err(e(format!(
+            "image is {}x{} tiles but the BAT is {}x{}; set bat.w / bat.h (32, 64 or 128 by              32 or 64) before importing",
+            imp.width, imp.height, size.width, size.height
+        )));
+    }
+    let n = imp.tiles.len();
+    let first = match tile {
+        Some(t) => t as usize,
+        None => s.find_free(size.words(), 16, n, 1).ok_or_else(|| {
+            e(format!(
+                "no free VRAM run for {n} tiles above the {}-word BAT; pass tile = N",
+                size.words()
+            ))
+        })?,
+    };
+    for (i, px) in imp.tiles.iter().enumerate() {
+        let t = first + i;
+        s.claim(t * 16..t * 16 + 16, Owner::Tile(t as u16));
+        s.vdc.write_tile(t as u16, px);
+    }
+    s.write_palettes(&func, 0, pal as usize, &imp.palettes);
+    for (i, &(t, p)) in imp.map.iter().enumerate() {
+        let tx = (x + (i % imp.width) as i64).rem_euclid(size.width as i64) as usize;
+        let ty = (y + (i / imp.width) as i64).rem_euclid(size.height as i64) as usize;
+        let w = ty * size.width as usize + tx;
+        s.claim(w..w + 1, Owner::Map);
+        let entry = BatEntry {
+            tile: (first + t as usize) as u16,
+            palette: pal as u8 + p,
+        };
+        s.vdc.set_bat(size, tx as u16, ty as u16, entry);
+    }
+    if !s.loading {
+        s.counts.vram_words += (n * 16 + imp.map.len()) as u32;
+    }
+    let out = Table::new(&ctx);
+    let set = |k: &'static str, v: usize| out.set(ctx, k, v as i64).unwrap();
+    set("tiles", n);
+    set("palettes", imp.palettes.len());
+    set("w", imp.width);
+    set("h", imp.height);
+    set("tile", first);
+    set("pal", pal as usize);
+    Ok(out)
+}
+
+/// `image_sprites(name, {pattern, pal, pals, w, h})`.
+fn image_sprites_call<'gc>(
+    ctx: piccolo::Context<'gc>,
+    st: &RefCell<State>,
+    name: &str,
+    o: Option<Table<'gc>>,
+) -> Result<Table<'gc>, String> {
+    let size = bat_size(ctx);
+    let mut s = st.borrow_mut();
+    let func = format!("image_sprites({name:?})");
+    let img = s.image("image_sprites", name)?;
+    let e = |m: String| format!("{func}: {m}");
+    let pattern = opt(ctx, o, "pattern").map_err(e)?;
+    let pal = match opt(ctx, o, "pal").map_err(e)? {
+        Some(p) => p,
+        None => free_palette(s.spr_pals_used),
+    };
+    if !(0..16).contains(&pal) {
+        return Err(e("pal must be 0..15".into()));
+    }
+    let pals = opt(ctx, o, "pals").map_err(e)?.unwrap_or(16 - pal);
+    if !(1..=16 - pal).contains(&pals) {
+        return Err(e(format!("pals must be 1..{} when pal is {pal}", 16 - pal)));
+    }
+    let fw = opt(ctx, o, "w").map_err(e)?.unwrap_or(16);
+    let fh = opt(ctx, o, "h").map_err(e)?.unwrap_or(16);
+    let imp = import_sprites(img, fw.max(0) as u32, fh.max(0) as u32, pals as usize)
+        .map_err(|m| e(m.to_string()))?;
+    let n = imp.patterns.len();
+    let first = match pattern {
+        Some(p) => {
+            if p < 0 || p as usize + n > MAX_PATTERNS {
+                return Err(e(format!(
+                    "{n} patterns from pattern {p} do not fit; patterns are 0..{}",
+                    MAX_PATTERNS - 1
+                )));
+            }
+            if !(p as usize).is_multiple_of(imp.cells) {
+                return Err(e(format!(
+                    "{fw}x{fh} sprites need a pattern number that is a multiple of {}",
+                    imp.cells
+                )));
+            }
+            p as usize
+        }
+        None => s
+            .find_free(size.words(), 64, n, imp.cells)
+            .ok_or_else(|| {
+                e(format!(
+                    "no free VRAM run for {n} sprite patterns above the {}-word BAT; pass                      pattern = N",
+                    size.words()
+                ))
+            })?,
+    };
+    for (i, px) in imp.patterns.iter().enumerate() {
+        let p = first + i;
+        s.claim(p * 64..p * 64 + 64, Owner::Pattern(p as u16));
+        s.vdc.write_pattern(p as u16, px);
+    }
+    s.write_palettes(&func, 256, pal as usize, &imp.palettes);
+    if !s.loading {
+        s.counts.vram_words += (n * 64) as u32;
+    }
+    let out = Table::new(&ctx);
+    let set = |k: &'static str, v: usize| out.set(ctx, k, v as i64).unwrap();
+    set("patterns", n);
+    set("palettes", imp.palettes.len());
+    set("frames", imp.frames());
+    set("pattern", first);
+    set("step", imp.cells);
+    set("pal", pal as usize);
+    let frame_pals = Table::new(&ctx);
+    for (i, &p) in imp.frame_palettes.iter().enumerate() {
+        frame_pals.set(ctx, i as i64 + 1, pal + p as i64).unwrap();
+    }
+    out.set(ctx, "pals", frame_pals).unwrap();
+    Ok(out)
 }
 
 /// A loaded toy.
@@ -353,7 +646,18 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
             s.counts.palette_writes += 1;
             match s.line {
                 Some(y) => s.line_writes[y].push(((i & 511) as u16, (c & 0x1ff) as u16)),
-                None => s.vce.set(i as usize, c as u16),
+                None => {
+                    s.vce.set(i as usize, c as u16);
+                    let e = (i & 511) as usize;
+                    if e & 15 != 0 {
+                        let bit = 1 << ((e >> 4) & 15);
+                        if e < 256 {
+                            s.bg_pals_used |= bit;
+                        } else {
+                            s.spr_pals_used |= bit;
+                        }
+                    }
+                }
             }
             stack.clear();
             Ok(CallbackReturn::Return)
@@ -569,6 +873,29 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
         }),
     );
 
+    // image_bg(name, opts) / image_sprites(name, opts): place an image
+    // registered with Engine::add_image into VRAM, the VCE and the BAT.
+    let st = state.clone();
+    set(
+        "image_bg",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let (name, opts) = image_args(ctx, &stack, "image_bg")?;
+            let t = image_bg_call(ctx, &st, &name, opts).map_err(|m| err(ctx, &m))?;
+            stack.replace(ctx, t);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+    let st = state.clone();
+    set(
+        "image_sprites",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let (name, opts) = image_args(ctx, &stack, "image_sprites")?;
+            let t = image_sprites_call(ctx, &st, &name, opts).map_err(|m| err(ctx, &m))?;
+            stack.replace(ctx, t);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
     // __line(y): the resolver marks which line its hooks are running on.
     let st = state.clone();
     set(
@@ -602,6 +929,9 @@ impl Engine {
             psg: Psg::default(),
             loading: false,
             counts: Default::default(),
+            images: Default::default(),
+            bg_pals_used: 0,
+            spr_pals_used: 0,
         }));
         Engine {
             lua: Lua::core(),
@@ -614,6 +944,19 @@ impl Engine {
             budget: Default::default(),
             audio_carry: 0.0,
         }
+    }
+
+    /// Register an RGBA8 image (row-major, 4 bytes per pixel) under `name`
+    /// for the toy's `image_bg` and `image_sprites` calls. Add images before
+    /// `load()`; they are kept across loads. A bad buffer size is reported
+    /// when the toy uses the image.
+    pub fn add_image(&mut self, name: &str, width: u32, height: u32, rgba: Vec<u8>) {
+        let img = Image {
+            width,
+            height,
+            rgba,
+        };
+        self.state.borrow_mut().images.insert(name.to_string(), img);
     }
 
     /// The cost meter for the most recent `render()`.
@@ -676,8 +1019,12 @@ impl Engine {
     /// Load a toy from `(file name, source)` chunks, run in order into one
     /// global environment, then run `init()` once if it exists. Resets the
     /// machine first.
+    ///
+    /// Images added with [`Engine::add_image`] are kept.
     pub fn load(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let images = std::mem::take(&mut self.state.borrow_mut().images);
         *self = Engine::new();
+        self.state.borrow_mut().images = images;
         let state = self.state.clone();
         state.borrow_mut().loading = true;
         let r = self.load_inner(files);
