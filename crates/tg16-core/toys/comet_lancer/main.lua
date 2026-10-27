@@ -1,36 +1,40 @@
 -- Comet Lancer: an on-rails 3D shooter for the TurboGrafx-16 model.
+-- See README.md in this directory for how it works.
 --
 -- Fly through rings (shield back), dodge towers and shoot down Hornets.
 -- Controls (the viewer's keys in brackets):
 --   d-pad   steer, up climbs (arrows)
 --   I       fire twin lasers, hold for auto fire (X)
---   II      barrel roll: enemy shots miss while rolling (Z)
+--   II      barrel roll: enemy shots miss while rolling; uses the ROLL meter (Z)
+--   SELECT  nova bomb: clears the sky of Hornets and shots, 3 per game (Shift)
 --   RUN     start (Enter); until then the ship flies itself
 -- After a game over, any button plays again.
 --
--- What is 3D and how (the TG16 has no polygon hardware):
+-- What is 3D and how (the TG16 has no polygon, scaling or rotation hardware):
 --   * The Lancer is real 3D: 17 flat-shaded polygons filled by the CPU into
 --     a 64x64 buffer every frame and sent to VRAM as two 32x64 sprites.
 --     cpu() charges the fill time to the budget meter.
---   * Hornets, towers, rings, bolts and explosions are sprites picked from
---     sets pre-scaled in init() (the Hornet sets are rendered by the same
---     polygon code), positioned with a perspective divide.
---   * The floor is one background layer with a BYR reload and a scroll on
---     every line (see 30_world.lua). Mountains and sky are a band and
---     backdrop writes.
+--   * Hornets, towers, rings, bolts, specks, clouds and explosions are
+--     sprites picked from sets pre-scaled in init(), placed with a
+--     perspective divide and turned with the horizon.
+--   * Sky and ground are one background layer: every line picks a map row
+--     and a scroll so the horizon tilts with the ship (see 30_world.lua).
 
-HOR_BASE = 92     -- horizon line when flying level
+HOR_BASE = 78     -- horizon line at the screen centre when flying level
 SHIP_D = 90       -- the ship flies this far ahead of the camera
 SPEED = 8         -- world units per frame
 FAR = 1700        -- objects appear this far ahead
 SHIELD_MAX = 64
+ROLL_MAX = 64
+TILT = 0.5        -- how much of the ship's bank the horizon follows
 
 -- Game state -------------------------------------------------------------
 
-local ship, cam, objs, lasers
-local mode, mode_t, score, shield = "attract", 0, 0, SHIELD_MAX
-local next_spawn, wave_i, fire_cd, roll_t, hurt_t
-local last_buttons = false
+local ship, cam, objs, lasers, specks
+local mode, mode_t, score, shield, roll_energy, bombs = "attract", 0, 0, SHIELD_MAX, ROLL_MAX, 3
+local next_spawn, wave_i, fire_cd, roll_t, hurt_t, flash_t
+local last_buttons, last_select = false, false
+local tilt, hor = 0, HOR_BASE
 local seed = 1
 
 local function rnd()
@@ -38,24 +42,43 @@ local function rnd()
   return seed / 2147483648
 end
 
+-- Co-pilot messages in the info bar, typed out a letter at a time.
+local msg, msg_t, msg_hold = "", 0, 0
+local function say(s, hold)
+  if s ~= msg or msg_t > #s * 2 + 30 then
+    msg, msg_t, msg_hold = s, 0, hold or 120
+  end
+end
+
 local function reset(new_mode)
   mode, mode_t = new_mode, 0
   ship = { x = 0, y = 60, vx = 0, vy = 0, roll = 0, alive = true }
   cam = { x = 0, y = 70, z = 0 }
   objs, lasers = {}, {}
-  next_spawn, wave_i, fire_cd, roll_t, hurt_t = 600, 0, 0, 0, 0
-  score, shield = 0, SHIELD_MAX
+  next_spawn, wave_i, fire_cd, roll_t, hurt_t, flash_t = 600, 0, 0, 0, 0, 0
+  score, shield, roll_energy, bombs = 0, SHIELD_MAX, ROLL_MAX, 3
   seed = 7
+  specks = {}
+  for i = 1, 14 do
+    specks[i] = { x = (rnd() - 0.5) * 900, z = rnd() * 1200 }
+  end
+  if new_mode == "play" then say("ROVY HERE. LET'S GO!", 120) end
 end
 
 local function add(o) objs[#objs + 1] = o; return o end
 
 -- The course: a repeating list of encounters, placed by distance.
 local COURSE = { "towers", "ring", "wave", "towers", "rings", "wave", "slalom", "wave2" }
+local SAYINGS = {
+  towers = "WATCH THOSE TOWERS!", ring = "RING AHEAD. FLY THROUGH!",
+  rings = "MORE RINGS. GRAB THEM!", wave = "HORNETS INBOUND!",
+  slalom = "TIGHT SQUEEZE. STEADY...", wave2 = "BIG WAVE. LOOK OUT!",
+}
 
 local function spawn(z)
   local kind = COURSE[wave_i % #COURSE + 1]
   wave_i = wave_i + 1
+  if mode == "play" then say(SAYINGS[kind], 120) end
   if kind == "towers" then
     for i = 0, 5 do
       local side = (i % 2 == 0) and -1 or 1
@@ -80,7 +103,7 @@ local function spawn(z)
     for i = 0, n - 1 do
       local off = i - (n - 1) / 2
       add({ kind = "hornet", bx = cx + off * 45, by = cy + abs(off) * 14, x = 0, y = 0,
-            z = z + abs(off) * 60, phase = i * 0.9, t = 0, shot = rnd() < 0.6, hit = 0 })
+            z = z + abs(off) * 60, phase = i * 0.9, t = 0, shot = rnd() < 0.6 })
     end
     return z + 1100
   end
@@ -89,7 +112,10 @@ end
 -- Autopilot for attract mode: chase rings and Hornets, steer around
 -- towers, roll when a shot is close.
 local function autopilot()
-  local want_x, want_y, fire, roll = ship.x * 0.9, 70, false, false
+  -- with nothing to chase, swoop from side to side (it shows off the
+  -- tilting horizon)
+  local want_x = sin(cam.z / 700) * 150
+  local want_y, fire, roll = 70 + sin(cam.z / 1100) * 30, false, false
   local best = 1e9
   for _, o in ipairs(objs) do
     local dz = o.z - (cam.z + SHIP_D)
@@ -108,13 +134,13 @@ local function autopilot()
       want_x = o.x + ((want_x >= o.x) and 50 or -50)
     end
   end
-  local p = { left = false, right = false, up = false, down = false, i = fire, ii = roll }
-  if want_x < ship.x - 8 then p.left = true elseif want_x > ship.x + 8 then p.right = true end
-  if want_y < ship.y - 8 then p.down = true elseif want_y > ship.y + 8 then p.up = true end
+  local p = { i = fire, ii = roll }
+  p.left, p.right = want_x < ship.x - 8, want_x > ship.x + 8
+  p.down, p.up = want_y < ship.y - 8, want_y > ship.y + 8
   return p
 end
 
--- Sound effects on channels 3 (lasers) and 6 (noise bursts).
+-- Sound effects on channels 3 (lasers), 4 (chimes) and 6 (noise bursts).
 local sfx_laser, sfx_boom, sfx_ding = 0, 0, 0
 
 local function explode(x, y, z, big)
@@ -132,7 +158,31 @@ local function damage(n)
     ship.alive = false
     explode(ship.x, ship.y, cam.z + SHIP_D, true)
     mode, mode_t = (mode == "attract") and "attract_dead" or "dead", 0
+    if mode == "dead" then say("NOOO! ROVY TO BASE...", 600) end
+  elseif mode == "play" then
+    say(shield < 20 and "SHIELD LOW! FIND A RING!" or "WE'RE HIT!", 120)
   end
+end
+
+local function nova()
+  bombs = bombs - 1
+  flash_t = 12
+  sfx_boom = 40
+  local n = 0
+  for _, o in ipairs(objs) do
+    if (o.kind == "hornet" or o.kind == "eshot") and not o.dead and o.z - cam.z < FAR then
+      o.dead = true
+      if o.kind == "hornet" then
+        n = n + 1
+        explode(o.x, o.y, o.z, false)
+      end
+    end
+  end
+  score = score + n * 100
+  -- (built in a local first: piccolo mis-compiles a concatenation with a
+  -- variable in the middle when it is written straight into call arguments)
+  local label = "NOVA BOMB! " .. n .. " DOWN!"
+  if mode == "play" then say(label, 120) end
 end
 
 local function update(input)
@@ -144,7 +194,11 @@ local function update(input)
     ship.vy = (ship.vy + ay * 0.7) * 0.88
     ship.x = clamp(ship.x + ship.vx, -190, 190)
     ship.y = clamp(ship.y + ship.vy, 14, 150)
-    if input.ii and roll_t == 0 then roll_t = 28 end
+    if input.ii and roll_t == 0 and roll_energy >= 32 then
+      roll_t = 28
+      roll_energy = roll_energy - 32
+    end
+    roll_energy = min(ROLL_MAX, roll_energy + 0.25)
     if roll_t > 0 then roll_t = roll_t - 1 end
     if hurt_t > 0 then hurt_t = hurt_t - 1 end
     fire_cd = max(0, fire_cd - 1)
@@ -155,7 +209,11 @@ local function update(input)
       end
       sfx_laser = 8
     end
+    if input.select and not last_select and bombs > 0 then nova() end
   end
+  last_select = input.select
+  if flash_t > 0 then flash_t = flash_t - 1 end
+
   -- Camera: follows the ship part of the way; forward at a steady speed.
   cam.z = cam.z + SPEED
   cam.x = ship.x * 0.75
@@ -163,6 +221,12 @@ local function update(input)
   local ship_z = cam.z + SHIP_D
 
   if cam.z + FAR > next_spawn then next_spawn = spawn(next_spawn) end
+  for _, s in ipairs(specks) do
+    if s.z < cam.z + 20 then
+      s.z = s.z + 1200
+      s.x = cam.x + (rnd() - 0.5) * 900
+    end
+  end
 
   -- Lasers.
   local kept = {}
@@ -177,6 +241,7 @@ local function update(input)
         hit = true
         score = score + 100
         explode(o.x, o.y, o.z, false)
+        if mode == "play" and rnd() < 0.4 then say("NICE SHOT!", 60) end
         break
       end
     end
@@ -217,12 +282,14 @@ local function update(input)
       elseif o.kind == "hornet" and dx < 26 and dy < 16 then
         damage(12); o.dead = true; explode(o.x, o.y, o.z, false)
       elseif o.kind == "eshot" and dx < 14 and dy < 11 then
+        if roll_t > 0 and mode == "play" then say("DEFLECTED! NICE ROLL!", 60) end
         damage(8); o.dead = true
       elseif o.kind == "ring" and dx * dx + dy * dy < 30 * 30 then
         score = score + 200
         shield = min(SHIELD_MAX, shield + 10)
         o.got = true
         sfx_ding = 20
+        if mode == "play" then say("GOT IT! SHIELD UP.", 60) end
       end
     end
     if not o.dead and o.z > cam.z + 10 then kept[#kept + 1] = o end
@@ -235,16 +302,16 @@ end
 local P_SHIP          -- two 32x64 sprites, rewritten every frame
 local buf
 local was_used = {}   -- which 16x16 cells of the ship buffer had pixels
-
 local list, nlist
+local tc, ts = 1, 0   -- cos and sin of the horizon's tilt
 
 local function put(depth, x, y, pattern, opts)
   nlist = nlist + 1
   list[nlist] = { depth, x, y, pattern, opts }
 end
 
--- Queue a level of a sprite set. ax, ay: where the canvas's anchor point
--- (given in canvas pixels) lands on screen.
+-- Queue a level of a sprite set. ax, ay: the canvas pixel that lands on
+-- screen point x, y.
 local function put_set(depth, lv, x, y, ax, ay, pal_, flip)
   local o = { pal = pal_, w = lv.sw, h = lv.sh, flip_x = flip }
   for _, part in ipairs(lv.parts) do
@@ -270,23 +337,24 @@ local function put_mirror(depth, lv, x, y, pal_)
   end
 end
 
-local function project(x, y, z, hor)
+-- World point -> screen, turned with the horizon around the screen centre.
+local function project(x, y, z)
   local dz = z - cam.z
   if dz < 1 then return nil end
   local k = F / dz
-  return 128 + (x - cam.x) * k, hor - (y - cam.y) * k, k, dz
+  local ux, uy = (x - cam.x) * k, -(y - cam.y) * k
+  return 128 + ux * tc - uy * ts, hor + ux * ts + uy * tc, k, dz
 end
 
 -- Fill the Lancer into the buffer and upload the cells that changed.
-local function draw_ship(f)
+local function draw_ship()
   R3.clear(buf)
   local roll = -ship.vx * 0.09
   if roll_t > 0 then roll = roll + (28 - roll_t) / 28 * 2 * pi end
   local cycles = R3.draw(SHIP, buf, {
-    yaw = ship.vx * 0.025, pitch = ship.vy * 0.035, roll = roll,
+    yaw = ship.vx * 0.025, pitch = ship.vy * 0.035, roll = roll - tilt * 0.5,
     scale = 1.25, dist = 160, view = 0.5, cx = 32, cy = 32,
   })
-  local uploads = 0
   for s = 0, 1 do
     for cy = 0, 3 do
       for cx = 0, 1 do
@@ -307,7 +375,6 @@ local function draw_ship(f)
             for x = 0, 15 do px[y * 16 + x + 1] = buf[row + x] end
           end
           pattern(P_SHIP + s * 8 + cx + cy * 2, px)
-          uploads = uploads + 1
         end
         if was_used[id] then cycles = cycles + 128 * 6 end   -- clear that cell
         was_used[id] = used
@@ -332,20 +399,20 @@ local function flush()
     end
     list[j + 1] = v
   end
-  for y = 0, 223 do units[y] = 0 end
+  for y = 0, VIEW_H - 1 do units[y] = 0 end
   local n = 0
   for i = 1, nlist do
     local e = list[i]
     local x, y, o = e[2], e[3], e[5]
     local w, h = o.w or 16, o.h or 16
-    if n < 64 and x < 256 and x + w > 0 and y < 224 and y + h > 0 and x > -32 and y > -64 then
+    if n < 64 and x < 256 and x + w > 0 and y < VIEW_H and y + h > 0 and x > -32 and y > -64 then
       local cost = w == 32 and 2 or 1
       local fits = true
-      for ly = max(0, y), min(223, y + h - 1) do
+      for ly = max(0, y), min(VIEW_H - 1, y + h - 1) do
         if units[ly] + cost > 16 then fits = false; break end
       end
       if fits then
-        for ly = max(0, y), min(223, y + h - 1) do units[ly] = units[ly] + cost end
+        for ly = max(0, y), min(VIEW_H - 1, y + h - 1) do units[ly] = units[ly] + cost end
         spr(n, x, y, e[4], o)
         n = n + 1
       end
@@ -354,33 +421,48 @@ local function flush()
   cpu(nlist * 60)
 end
 
-local function draw(f, hor)
-  list, nlist = {}, 0
-  local ship_sx, ship_sy
+local CLOUDS = { { -0.9, 0.42 }, { -0.25, 0.55 }, { 0.5, 0.38 }, { 1.2, 0.5 } }
 
-  -- The ship and its shadow.
+local function draw(f)
+  list, nlist = {}, 0
+
+  -- The ship and its dithered shadow.
   if ship.alive and (hurt_t == 0 or f % 4 < 2) then
-    draw_ship(f)
-    local sx, sy = project(ship.x, ship.y, cam.z + SHIP_D, hor)
-    ship_sx, ship_sy = sx, sy
+    draw_ship()
+    local sx, sy = project(ship.x, ship.y, cam.z + SHIP_D)
     put(SHIP_D, floor(sx) - 32, floor(sy) - 32, P_SHIP, { pal = 0, w = 32, h = 64 })
     put(SHIP_D, floor(sx), floor(sy) - 32, P_SHIP + 8, { pal = 0, w = 32, h = 64 })
-    if f % 2 == 0 then
-      local gx, gy, k = project(ship.x, 0, cam.z + SHIP_D, hor)
-      local li = R3.level(SET_SHADOW, 40 * k)
-      if li then
-        local lv = SET_SHADOW[li]
-        put_set(SHIP_D + 1, lv, gx, gy, lv.w / 2, lv.h / 2, 7)
-      end
+    local gx, gy, k = project(ship.x, 0, cam.z + SHIP_D)
+    local li = R3.level(SET_SHADOW, 40 * k)
+    if li then
+      local lv = SET_SHADOW[li]
+      put_set(SHIP_D + 1, lv, gx, gy, lv.w / 2, lv.h / 2, 7, false)
+    end
+  end
+
+  -- Clouds: far away, so they only slide sideways and turn with the sky.
+  for i, c in ipairs(CLOUDS) do
+    local ux = ((c[1] * 300 - cam.x * 0.05 - f * 0.05) + 450) % 900 - 450
+    local uy = -c[2] * 120 - 16
+    local x, y = 128 + ux * tc - uy * ts, hor + ux * ts + uy * tc
+    local lv = SET_CLOUD[(i % 2) + 1]
+    put_set(5000 + i, lv, x, y, lv.w / 2, lv.h / 2, 10, false)
+  end
+
+  for _, s in ipairs(specks) do
+    local sx, sy, k, dz = project(s.x, 0, s.z)
+    if sx then
+      local li = R3.level(SET_SPECK, 2.2 * k * 1.5)
+      if li then put_set(dz + 2, SET_SPECK[li], sx, sy, 8, 8, 9, false) end
     end
   end
 
   for _, o in ipairs(objs) do
-    local sx, sy, k, dz = project(o.x, o.y, o.z, hor)
+    local sx, sy, k, dz = project(o.x, o.y, o.z)
     if sx and dz < FAR + 50 then
       if o.kind == "hornet" then
         local bank = o.bank or 0
-        local set = abs(bank) > 0.45 and SET_HORNET_BANK or SET_HORNET
+        local set = (abs(bank) > 0.45 and 48 * k < 34) and SET_HORNET_BANK or SET_HORNET
         local li = R3.level(set, 48 * k)
         if li then
           local lv = set[li]
@@ -390,42 +472,42 @@ local function draw(f, hor)
         local li = R3.level(SET_TOWER, 40 * k)
         if li and 40 * k < SET_TOWER[#SET_TOWER].size * 1.4 then
           local lv = SET_TOWER[li]
-          local flip = o.x > cam.x
-          put_set(dz, lv, sx, sy, lv.size / 2, lv.h, 2, flip)
+          put_set(dz, lv, sx, sy, lv.size / 2, lv.h, 2, o.x > cam.x)
         end
       elseif o.kind == "ring" and not o.got then
         local li = R3.level(SET_RING, 70 * k)
         if li then put_mirror(dz, SET_RING[li], sx, sy, 3) end
       elseif o.kind == "eshot" then
         local li = R3.level(SET_BOLT, 10 * k)
-        if li then put_set(dz, SET_BOLT[li], sx, sy, 8, 8, 5) end
+        if li then put_set(dz, SET_BOLT[li], sx, sy, 8, 8, 5, false) end
       elseif o.kind == "boom" then
         local frame_ = min(4, o.t // 6 + 1)
         local big = o.big or 30 * k > 20
-        local set = big and SET_BOOM32[frame_] or SET_BOOM16[frame_]
-        local lv = set[1]
+        local lv = (big and SET_BOOM32[frame_] or SET_BOOM16[frame_])[1]
         if o.big then
-          -- the ship's explosion: four bursts around it
           for q = 0, 3 do
-            put_set(dz, lv, sx + (q % 2 * 2 - 1) * 12, sy + (q // 2 * 2 - 1) * 8, 16, 16, 6)
+            put_set(dz, lv, sx + (q % 2 * 2 - 1) * 12, sy + (q // 2 * 2 - 1) * 8, 16, 16, 6, false)
           end
         else
-          put_set(dz, lv, sx, sy, lv.w / 2, lv.h / 2, 6)
+          put_set(dz, lv, sx, sy, lv.w / 2, lv.h / 2, 6, false)
         end
       end
     end
   end
   for _, l in ipairs(lasers) do
-    local sx, sy, k, dz = project(l.x, l.y, l.z, hor)
+    local sx, sy, k, dz = project(l.x, l.y, l.z)
     if sx then
       local li = R3.level(SET_BOLT, 8 * k)
-      if li then put_set(dz, SET_BOLT[li], sx, sy, 8, 8, 4) end
+      if li then put_set(dz, SET_BOLT[li], sx, sy, 8, 8, 4, false) end
     end
   end
   flush()
 end
 
--- HUD --------------------------------------------------------------------
+-- Info bar -----------------------------------------------------------------
+-- Map rows 0..3, shown on lines 192..223:
+--   portrait (cols 1-4) | SHIELD + bar          | SCORE + digits
+--                       | message line          | ROLL meter + bombs
 
 local function pad6(n)
   local s = "" .. floor(n)
@@ -433,24 +515,40 @@ local function pad6(n)
   return s
 end
 
-local function hud(f)
-  text(1, HUD_ROW, "SCORE " .. pad6(score))
-  text(17, HUD_ROW, "SHIELD")
-  shield_bar(24, HUD_ROW, shield, SHIELD_MAX)
+local shield_color = -1
+
+local function info_bar(f)
+  local row = BAR_ROW
+  text(6, row + 1, "SHIELD", 0)
+  meter(6, row + 2, shield, SHIELD_MAX, 0)
+  text(19, row + 1, "SCORE " .. pad6(score), 0)
+  text(19, row + 2, "ROLL", 0)
+  meter(23, row + 2, roll_energy, ROLL_MAX, 4)
+  bomb_icons(15, row + 2, bombs)
+  -- The shield bar goes yellow, then red.
+  local sc = shield > 32 and 0 or (shield > 16 and 1 or 2)
+  if sc ~= shield_color then
+    shield_color = sc
+    pal(0, 2, ({ rgb(90, 230, 120), rgb(240, 210, 60), rgb(240, 60, 50) })[sc + 1])
+  end
+
   local attract = mode == "attract" or mode == "attract_dead"
   if attract then
-    text(10, TITLE_ROW, "COMET LANCER")
-    text(10, TITLE_ROW + 2, (f // 30 % 2 == 0) and " PRESS RUN  " or "            ")
-  elseif mode == "dead" and mode_t > 40 then
-    text(10, TITLE_ROW, "  GAME OVER ")
-    text(10, TITLE_ROW + 2, "            ")
-  else
-    text(10, TITLE_ROW, "            ")
-    text(10, TITLE_ROW + 2, "            ")
+    if f % 240 < 120 then say("COMET LANCER  PRESS RUN", 1000)
+    else say("ARROWS, X FIRE, Z ROLL", 1000) end
+  elseif mode == "dead" and mode_t > 60 then
+    say("GAME OVER. ANY BUTTON!", 1000)
   end
+  msg_t = msg_t + 1
+  local n = min(#msg, msg_t // 2)
+  local line = string.sub(msg, 1, n)
+  if msg_t > #msg * 2 + msg_hold and not attract then line = "" end
+  while #line < 26 do line = line .. " " end
+  text(6, row + 3, line, 0)
+  show_portrait(1, row, n < #msg and (msg_t // 4) % 2 == 0)
 end
 
--- Music ------------------------------------------------------------------
+-- Music --------------------------------------------------------------------
 
 local LEAD = { "D5", "F5", "A5", "D6", "C6", "A5", "G5", "A5",
                "A#4", "D5", "F5", "A#5", "A5", "F5", "E5", "C5" }
@@ -460,24 +558,20 @@ local function sound(f)
   local step = f // 7
   psg(1, { on = f % 7 < 5, note = LEAD[step % 16 + 1] })
   psg(2, { on = f % 14 < 12, note = BASS[(step // 4) % 8 + 1] })
-  -- drums on 5: low thump on beats, tick between
   if f % 14 == 0 then psg(5, { on = true, noise = (step // 2) % 2 == 0 and 22 or 30, vol = 18 })
   elseif f % 14 == 3 then psg(5, { on = false }) end
-  -- lasers: a falling square blip on 3
   if sfx_laser > 0 then
     psg(3, { on = true, hz = 1400 - (8 - sfx_laser) * 150, vol = 22 })
     sfx_laser = sfx_laser - 1
   else
     psg(3, { on = false })
   end
-  -- ring chime on 4
   if sfx_ding > 0 then
     psg(4, { on = true, note = (sfx_ding > 10) and "E6" or "B6", vol = 10 + sfx_ding // 2 })
     sfx_ding = sfx_ding - 1
   else
     psg(4, { on = false })
   end
-  -- explosions: noise on 6, fading
   if sfx_boom > 0 then
     psg(6, { on = true, noise = 8 + sfx_boom % 4, vol = min(31, 10 + sfx_boom) })
     sfx_boom = sfx_boom - 1
@@ -486,7 +580,7 @@ local function sound(f)
   end
 end
 
--- Hooks ------------------------------------------------------------------
+-- Hooks --------------------------------------------------------------------
 
 function init()
   build_world()
@@ -508,8 +602,10 @@ function init()
   psg(6, { noise = 10 })
 end
 
+local was_flashing = false
+
 function frame(t, f)
-  local any = pad.up or pad.down or pad.left or pad.right or pad.i or pad.ii or pad.run
+  local any = pad.up or pad.down or pad.left or pad.right or pad.i or pad.ii or pad.run or pad.select
   local pressed = any and not last_buttons
   last_buttons = any
   mode_t = mode_t + 1
@@ -525,14 +621,28 @@ function frame(t, f)
   end
 
   local input = pad
-  if mode == "attract" or mode == "attract_dead" then input = autopilot() end
+  if mode == "attract" or mode == "attract_dead" then
+    input = autopilot()
+    if mode_t % 600 == 400 and bombs > 0 then input.select = true end
+  end
   update(input)
   cpu(3000 + 120 * #objs)
 
-  local hor = clamp(HOR_BASE + floor(ship.vy * 2), 72, 112)
-  local attract = mode ~= "play"
-  world_frame(cam, hor, attract and 56 or 16)
-  hud(f)
-  draw(f, hor)
+  -- The horizon follows the ship's bank (not its barrel rolls) and pitch.
+  local want = clamp(-ship.vx * 0.09 * TILT, -0.38, 0.38)
+  tilt = tilt + (want - tilt) * 0.25
+  tc, ts = cos(tilt), sin(tilt)
+  hor = clamp(HOR_BASE + floor(ship.vy * 2), 58, 100)
+
+  if flash_t > 0 then
+    world_palettes(flash_t / 12)
+    was_flashing = true
+  elseif was_flashing then
+    world_palettes(0)
+    was_flashing = false
+  end
+  world_frame(hor, tilt)
+  info_bar(f)
+  draw(f)
   sound(f)
 end

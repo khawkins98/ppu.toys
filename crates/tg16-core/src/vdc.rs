@@ -256,7 +256,9 @@ impl Vdc {
     /// Write a 16x16 sprite pattern from 256 color indices (row-major).
     /// Each plane is 16 words, one per row, leftmost pixel in bit 15.
     pub fn write_pattern(&mut self, pattern: u16, pixels: &[u8; 256]) {
-        let base = (pattern as usize & 0x3ff) * 64;
+        // 32K words of VRAM hold 512 patterns; the address wraps like the
+        // hardware's 16-bit VRAM address does.
+        let base = (pattern as usize & 0x1ff) * 64;
         for row in 0..16 {
             let mut planes = [0u16; 4];
             for col in 0..16 {
@@ -274,7 +276,7 @@ impl Vdc {
     /// Color index (0..15) of pixel `(x, y)` of a 16x16 sprite pattern.
     #[inline]
     pub fn pattern_pixel(&self, pattern: u16, x: u16, y: u16) -> u8 {
-        let base = (pattern as usize & 0x3ff) * 64 + (y as usize & 15);
+        let base = (pattern as usize & 0x1ff) * 64 + (y as usize & 15);
         let bit = 15 - (x & 15);
         let mut c = 0u8;
         for plane in 0..4 {
@@ -372,5 +374,14 @@ mod tests {
             }
         }
         assert_eq!(v.vram[3 * 64] >> 15, (px[0] & 1) as u16);
+    }
+
+    #[test]
+    fn patterns_past_vram_wrap_instead_of_panicking() {
+        let mut v = Vdc::default();
+        let px = [7u8; 256];
+        v.write_pattern(512 + 3, &px);
+        assert_eq!(v.pattern_pixel(3, 0, 0), 7, "pattern 515 is pattern 3");
+        assert_eq!(v.pattern_pixel(1023, 0, 0), 0);
     }
 }

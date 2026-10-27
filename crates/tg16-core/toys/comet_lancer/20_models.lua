@@ -92,8 +92,8 @@ function palettes()
   }
   for i, c in ipairs(hornet) do spal(1, i, c); spal(8, i, rgb(255, 255, 255)) end
   -- 2: towers. 3: rings. 4: lasers. 5: enemy shots. 6: explosions. 7: shadow.
-  local tower = { rgb(60, 70, 90), rgb(95, 105, 125), rgb(140, 150, 170),
-                  rgb(185, 195, 210), rgb(25, 30, 45), rgb(255, 220, 120) }
+  local tower = { rgb(70, 78, 100), rgb(100, 110, 132), rgb(150, 160, 180),
+                  rgb(205, 212, 226), rgb(25, 30, 45), rgb(255, 220, 120), rgb(44, 50, 68) }
   for i, c in ipairs(tower) do spal(2, i, c) end
   local ring = { rgb(140, 90, 10), rgb(220, 160, 30), rgb(255, 220, 90), rgb(255, 255, 220) }
   for i, c in ipairs(ring) do spal(3, i, c) end
@@ -104,6 +104,9 @@ function palettes()
   local boom = { rgb(170, 30, 20), rgb(240, 110, 30), rgb(255, 210, 60), rgb(255, 255, 230) }
   for i, c in ipairs(boom) do spal(6, i, c) end
   spal(7, 1, rgb(20, 60, 30))
+  -- 9: specks; 10: clouds
+  spal(9, 1, rgb(240, 250, 240)); spal(9, 2, rgb(150, 200, 160))
+  spal(10, 1, rgb(250, 252, 255)); spal(10, 2, rgb(205, 218, 236)); spal(10, 3, rgb(160, 180, 210))
 end
 
 -- Deterministic noise for the art (the same every run).
@@ -141,14 +144,17 @@ function build_sets()
                            dist = 300, view = 0.1, cx = b.w / 2, cy = b.h / 2 })
     end
   end
-  SET_HORNET = R3.set(hl, hornet(0))
-  SET_HORNET_BANK = R3.set(hl, hornet(0.6))
+  SET_HORNET = R3.set(hl, hornet(0), false)
+  -- The banked pose only up to 32x32: big Hornets are close and brief.
+  local small = {}
+  for i = 1, 8 do small[i] = hl[i] end
+  SET_HORNET_BANK = R3.set(small, hornet(0.6), false)
 
   -- Towers: size = width of the front face; they stand on their bottom edge.
   -- The canvas shows the right-hand side; flip it for towers on the right.
   local tl = levels({ { 4, 16, 32 }, { 6, 16, 32 }, { 8, 16, 32 }, { 11, 16, 32 },
                       { 14, 32, 64 }, { 18, 32, 64 }, { 22, 32, 64 },
-                      { 30, 64, 128 }, { 40, 64, 128 }, { 46, 64, 128 } })
+                      { 32, 64, 128 }, { 46, 64, 128 } })
   SET_TOWER = R3.set(tl, function(b, size)
     local side = max(1, floor(size * 0.3))
     local hgt = floor(size * 2.4)
@@ -156,7 +162,12 @@ function build_sets()
     local y0 = b.h - hgt
     for y = y0, b.h - 1 do
       for x = 0, size - 1 do
-        local c = 3
+        -- front face: a dithered gradient, light at the top to dark at the foot
+        local g = (y - y0) / hgt * 2.2
+        local k = floor(g)
+        local c = 4 - k
+        if (g - k) * 4 > ((y % 2) * 2 + x % 2 + 0.5) % 4 then c = c - 1 end
+        c = clamp(c, 2, 4)
         if size >= 8 and x % 4 >= 1 and x % 4 <= 2 and (y - y0) % 6 >= 2 and (y - y0) % 6 <= 3
            and x > 0 and x < size - 1 then
           c = rnd() < 0.3 and 6 or 5
@@ -165,7 +176,9 @@ function build_sets()
       end
       for x = size, size + side - 1 do
         -- The side face slants up towards the back.
-        if y >= y0 - floor((x - size + 1) * top / side) then b[y * b.w + x + 1] = 1 end
+        if y >= y0 - floor((x - size + 1) * top / side) then
+          b[y * b.w + x + 1] = ((y - y0) > hgt * 0.6 and (x + y) % 2 == 0) and 7 or 1
+        end
       end
     end
     for y = y0 - top, y0 - 1 do
@@ -178,7 +191,7 @@ function build_sets()
     if size >= 4 then
       for y = y0, b.h - 1 do b[y * b.w + 1] = 2 end
     end
-  end)
+  end, false)
 
   -- Rings, drawn as a top-left quarter and mirrored. size = diameter.
   SET_RING = R3.set(levels({ { 8, 16, 16 }, { 12, 16, 16 }, { 18, 16, 16 }, { 26, 16, 16 },
@@ -210,7 +223,7 @@ function build_sets()
       disc(b, 8, 8, size / 2 + 0.3, 1)
       disc(b, 8, 8, size / 2 * 0.7, 2)
       if size >= 5 then disc(b, 8, 8, size / 2 * 0.35, 3) end
-    end)
+    end, false)
 
   -- Explosions: four frames each in two sizes.
   local function boom(canvas)
@@ -226,7 +239,7 @@ function build_sets()
           disc(b, c + cos(a) * d, c + sin(a) * d, pr, col)
           if k <= 2 then disc(b, c + cos(a) * d * 0.6, c + sin(a) * d * 0.6, pr * 0.5, 4) end
         end
-      end)
+      end, false)
     end
     return sets
   end
@@ -238,8 +251,38 @@ function build_sets()
       for y = 0, b.h - 1 do
         for x = 0, b.w - 1 do
           local dx, dy = (x + 0.5 - b.w / 2) / (size / 2), (y + 0.5 - b.h / 2) / (size / 6)
-          if dx * dx + dy * dy <= 1 then b[y * b.w + x + 1] = 1 end
+          -- a dithered shadow: every other pixel, so the ground shows through
+          if dx * dx + dy * dy <= 1 and (x + y) % 2 == 0 then b[y * b.w + x + 1] = 1 end
         end
       end
-    end)
+    end, false)
+
+  -- Specks on the ground (they show the speed now that the floor is a
+  -- smooth gradient): one or two pixels.
+  SET_SPECK = R3.set(levels({ { 1, 16, 16 }, { 2, 16, 16 }, { 3, 16, 16 } }), function(b, size)
+    for y = 0, size - 1 do
+      for x = 0, size - 1 do b[(7 + y) * 16 + 7 + x + 1] = (size == 3 and (x + y) % 2 == 1) and 2 or 1 end
+    end
+  end, false)
+
+  -- Clouds: a 64x32 puff with dithered edges, in two sizes.
+  SET_CLOUD = R3.set(levels({ { 32, 32, 16 }, { 64, 64, 32 } }), function(b, size)
+    local puffs = { { 0.3, 0.6, 0.22 }, { 0.5, 0.45, 0.28 }, { 0.7, 0.6, 0.2 }, { 0.42, 0.65, 0.2 },
+                    { 0.6, 0.7, 0.18 } }
+    local w, h = b.w, b.h
+    for y = 0, h - 1 do
+      for x = 0, w - 1 do
+        local best = 0
+        for _, p in ipairs(puffs) do
+          local dx, dy = (x / w - p[1]) / p[3], (y / h - p[2]) / (p[3] * 1.6)
+          best = max(best, 1 - (dx * dx + dy * dy))
+        end
+        local c = 0
+        if best > 0.35 then c = (y / h < 0.55) and 1 or 2
+        elseif best > 0.15 then c = ((x + y) % 2 == 0) and 3 or 0 end
+        if c ~= 0 and best > 0.35 and y / h > 0.5 and best < 0.6 and (x + y) % 2 == 0 then c = 3 end
+        b[y * w + x + 1] = c
+      end
+    end
+  end, false)
 end

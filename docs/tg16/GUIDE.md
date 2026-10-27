@@ -428,18 +428,21 @@ fakes 3D the way the console could:
   side facing the camera. Sprites are sorted near to far, and the farthest
   are left out when a line would go over 16 units, instead of letting the
   hardware drop random ones.
-- **The floor is one background layer.** The map holds the checkerboard at
-  about 40 pre-scaled square widths, one map row each. Every floor line
-  picks the row whose width matches its distance (a `BYR` reload) and
-  scrolls it so the squares line up with the camera; forward motion flips
-  the checker phase, which is a shift by one square. Hazier palettes for
-  far rows, backdrop writes for the sky gradient, and one more reload for
-  a mountain band. The horizon cannot tilt, so the ship banks but the world
-  does not.
+- **Sky and ground tilt with the ship on one background layer.** The map
+  holds rows that are sky on one side of a point and ground on the other,
+  with dithered gradients stretched for 11 tilt angles. Every line picks
+  one (a `BYR` reload) and scrolls it so that point lands where the tilted
+  horizon crosses the line, so the edge is exact on every line. Lines far
+  from the horizon use flat rows. Sprites cannot rotate, so objects move to
+  their turned positions but stay upright.
+- **An info bar** in the bottom 32 lines (background tiles, sprites hidden
+  there): a co-pilot portrait that talks, shield and roll meters, score and
+  bombs.
 
-`ppu tg16 check` puts the whole thing at about 45 to 55% of a frame. Controls:
-the d-pad steers, I fires, II does a barrel roll, Run starts; with nobody at
-the pad it flies itself.
+`ppu tg16 check` puts the whole thing at about 55% of a frame. Controls:
+the d-pad steers, I fires, II does a barrel roll, Select drops a nova bomb,
+Run starts; with nobody at the pad it flies itself. The toy's README covers
+where the TG16 does better than the SNES here and where it falls short.
 
 ## SNES and TG16 side by side
 
