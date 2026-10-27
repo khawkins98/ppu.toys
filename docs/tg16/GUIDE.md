@@ -441,6 +441,30 @@ fakes 3D the way the console could:
 the d-pad steers, I fires, II does a barrel roll, Run starts; with nobody at
 the pad it flies itself.
 
+## SNES and TG16 side by side
+
+`compare/snes/` holds SNES ports of the example toys (`sunset`, `kit_demo`,
+`photo`), each written the SNES way: where the TG16 toy uses raster splits,
+`kit` helpers and the PSG, the port uses BG layers, Mode 7, colour math,
+windows and the S-DSP. They are ordinary SNES toys (`ppu check
+compare/snes/kit_demo`). The viewer's `compare.html` plays a toy on both
+engines on one clock, with each machine's budget, and also shows the bundled
+SNES examples next to their `ppu tg16 convert` output (see
+`viewer/tg16/README.md`).
+
+Things the ports show about the two machines:
+
+- **Layers.** SNES Mode 1 has three scrolling layers; parallax is a scroll
+  register per layer instead of per-line scroll on one layer.
+- **Floors.** Mode 7 scales each line, so the kit demo's road narrows to the
+  horizon; `kit.floor` can only pick rows and shift them.
+- **Transparency and masks.** Colour math blends a sprite every frame where
+  the TG16 flickers it; a colour window with clip-to-black letterboxes.
+- **Photos.** A SNES layer addresses 1024 tiles and Mode 1's two 4bpp layers
+  share 8 palettes of 15; the TG16 layer addresses 2048 tiles with 16
+  palettes. The photo port splits the painting across BG1 and BG2 and gets
+  half the palettes.
+
 ## Not modelled yet
 
 SuperGrafx, CD audio, the HuC6280 CPU itself, and the interrupt timing of mid-line writes (the

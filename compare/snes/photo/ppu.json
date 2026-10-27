@@ -1,0 +1,9 @@
+{
+  "title": "Photo (SNES port)",
+  "description": "SNES port of the TG16 photo toy: the same painted panorama through the SNES importer (two BG layers, 8 palettes), HDMA parallax and ripple, colour-math water and S-DSP music with echo.",
+  "files": ["main.lua"],
+  "sources": [
+    { "name": "lake_left", "kind": "bg", "file": "assets/lake_left.png", "options": { "dither": "bayer", "max_palettes": 4 } },
+    { "name": "lake_right", "kind": "bg", "file": "assets/lake_right.png", "options": { "dither": "bayer", "max_palettes": 4 } }
+  ]
+}

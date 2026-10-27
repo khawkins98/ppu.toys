@@ -1,0 +1,6 @@
+{
+  "title": "Sunset (SNES port)",
+  "description": "SNES port of the TG16 sunset toy: two BG layers for parallax, an HDMA sky gradient, OBJ priority and S-DSP music.",
+  "files": ["main.lua"],
+  "sources": []
+}

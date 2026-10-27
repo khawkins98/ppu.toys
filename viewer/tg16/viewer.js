@@ -180,8 +180,23 @@ async function openFiles(files) {
 
 // ---------------------------------------------------------------- running
 
+// Joypad: bits up, down, left, right, I, II, select, run. Keys follow the
+// SNES viewer's (ppu-cli/docs/pad.md): X = I (SNES A), Z = II (SNES B),
+// Enter = Run (Start), Shift = Select.
+const PAD_KEYS = {
+  ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3,
+  KeyX: 4, KeyZ: 5, ShiftLeft: 6, ShiftRight: 6, Enter: 7,
+};
+const held = new Set();
+function padMask() {
+  let m = 0;
+  for (const code of held) m |= 1 << PAD_KEYS[code];
+  return m;
+}
+
 function runFrame() {
   try {
+    tg.set_pad(padMask());
     tg.frame(frameNo / FPS, frameNo);
   } catch (e) {
     fail(e);
@@ -438,11 +453,14 @@ function wireUi() {
     if (e.dataTransfer.files.length) openFiles(e.dataTransfer.files);
   });
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement) return;
-    if (e.key === ' ') { e.preventDefault(); togglePause(); }
+    if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.code in PAD_KEYS) { e.preventDefault(); held.add(e.code); }
+    else if (e.key === ' ') { e.preventDefault(); togglePause(); }
     else if (e.key === '.') { if (paused) step(); }
     else if (e.key === 'r') { restart(); status(); }
   });
+  window.addEventListener('keyup', (e) => held.delete(e.code));
+  window.addEventListener('blur', () => held.clear());
   window.addEventListener('resize', fit);
 }
 

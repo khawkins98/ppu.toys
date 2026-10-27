@@ -1,4 +1,5 @@
-# Builds the TG16 toy viewer (viewer/tg16) and publishes it to GitHub Pages.
+# Builds the TG16 toy viewer (viewer/tg16) and the SNES vs TG16 comparison
+# page (viewer/tg16/compare.html) and publishes them to GitHub Pages.
 # Needs Settings -> Pages -> Source: "GitHub Actions".
 name: TG16 viewer on Pages
 
@@ -7,6 +8,10 @@ on:
     branches: [tg16-core]
     paths:
       - "crates/tg16-core/**"
+      - "crates/ppu-core/**"
+      - "crates/ppu-cli/**"
+      - "compare/**"
+      - "plugin/skills/creating-demos/examples/**"
       - "vendor/piccolo/**"
       - "viewer/tg16/**"
       - "Cargo.lock"

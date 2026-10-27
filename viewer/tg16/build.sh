@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Build the tg16-core wasm module and the demo pack into viewer/tg16/pkg/.
+# Build the tg16-core wasm module and the demo pack into viewer/tg16/pkg/,
+# plus what compare.html needs: the ppu-core (SNES) wasm module in pkg/snes/,
+# the SNES ports in compare/snes/ packed for it, and the bundled SNES examples
+# with their automatic TG16 conversions in pkg/convert/.
 # Needs: rustup target add wasm32-unknown-unknown
 #        cargo install wasm-bindgen-cli --version <wasm-bindgen version in Cargo.lock>
 set -euo pipefail
@@ -9,6 +12,11 @@ profile="${PROFILE:-release}"
 
 cd "$root"
 cargo build -p tg16-core --target wasm32-unknown-unknown --profile "$profile" --features bindings
+# ppu-core's default `bindings` feature is its wasm-bindgen shim (src/wasm.rs).
+cargo build -p ppu-core --target wasm32-unknown-unknown --profile "$profile"
+# The host `ppu` CLI packs the SNES toys and converts the examples. Always an
+# optimized build: `ppu tg16 convert` plays each toy for 12 seconds.
+cargo build -p ppu-cli --release
 
 want="$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)"
 have="$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" || true
@@ -25,9 +33,47 @@ mkdir -p "$here/pkg"
 wasm-bindgen --target web --no-typescript --out-dir "$here/pkg" \
   "$target_dir/wasm32-unknown-unknown/$profile/tg16_core.wasm"
 
+mkdir -p "$here/pkg/snes"
+wasm-bindgen --target web --no-typescript --out-dir "$here/pkg/snes" \
+  "$target_dir/wasm32-unknown-unknown/$profile/ppu_core.wasm"
+
 if command -v wasm-opt >/dev/null; then
   wasm-opt -O2 "$here/pkg/tg16_core_bg.wasm" -o "$here/pkg/tg16_core_bg.wasm"
+  wasm-opt -O2 "$here/pkg/snes/ppu_core_bg.wasm" -o "$here/pkg/snes/ppu_core_bg.wasm"
 fi
+
+ppu="$target_dir/release/ppu"
+# Close ports: compare/snes/<name>/ as SNES packs (`ppu pack`, the format
+# Studio opens): pkg/snes/<name>.ppu.json, next to pkg/<name>.tg16.json.
+for dir in "$root"/compare/snes/*/; do
+  name="$(basename "$dir")"
+  "$ppu" pack "$dir" -o "$here/pkg/snes/$name.ppu.json" >/dev/null
+done
+# Auto-converted examples: each bundled SNES example as pkg/snes/<name>.ppu.json,
+# its `ppu tg16 convert` output as pkg/convert/<name>.tg16.json, and the
+# converter's report as pkg/convert/<name>.md.
+examples="$root/plugin/skills/creating-demos/examples"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$here/pkg/convert"
+for dir in "$examples"/*/; do
+  [ -f "$dir/ppu.json" ] || continue
+  name="$(basename "$dir")"
+  "$ppu" pack "$dir" -o "$here/pkg/snes/$name.ppu.json" >/dev/null
+  "$ppu" tg16 convert "$dir" -o "$work/$name" >/dev/null
+  "$ppu" tg16 pack "$work/$name" -o "$here/pkg/convert/$name.tg16.json" >/dev/null
+  cp "$work/$name/CONVERT.md" "$here/pkg/convert/$name.md"
+done
+# TG16-only toys (an example toy with no compare/snes/<name> port) are listed
+# for compare.html in pkg/compare.json.
+python3 - "$root/crates/tg16-core/toys" "$root/compare/snes" "$here/pkg/compare.json" <<'PY'
+import json, os, sys
+toys, ports, out = sys.argv[1:4]
+names = sorted(e[:-4] if e.endswith(".lua") else e for e in os.listdir(toys)
+               if e.endswith(".lua") or os.path.isfile(os.path.join(toys, e, "main.lua")))
+with open(out, "w") as f:
+    json.dump({"tg16Only": [n for n in names if not os.path.isdir(os.path.join(ports, n))]}, f)
+PY
 
 # The built-in demo (the starter toy) plus every example toy, as packs in
 # the `ppu tg16 pack` format (docs/tg16/GUIDE.md, "Packing"):
@@ -63,5 +109,5 @@ for entry in sorted(os.listdir(toys)):
 write("demo", {"main.lua": read(os.path.join(toys, "sunset.lua"))}, {})
 PY
 
-echo "built $here/pkg ($(du -h "$here/pkg/tg16_core_bg.wasm" | cut -f1) wasm)"
-echo "serve: cd $here && python3 -m http.server 8000  ->  http://localhost:8000/"
+echo "built $here/pkg ($(du -h "$here/pkg/tg16_core_bg.wasm" | cut -f1) TG16 wasm, $(du -h "$here/pkg/snes/ppu_core_bg.wasm" | cut -f1) SNES wasm)"
+echo "serve: cd $here && python3 -m http.server 8000  ->  http://localhost:8000/ (and /compare.html)"

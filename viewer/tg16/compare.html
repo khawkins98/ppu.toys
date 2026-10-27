@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNES vs TG16</title>
+<style>
+  :root {
+    --bg: #15161a; --panel: #1f2127; --line: #33363f; --text: #e6e6e6;
+    --dim: #9a9ca4; --accent: #f0a030; --snes: #8f8cf0; --tg16: #f0a030;
+    --ok: #5cc06a; --warn: #e0b030; --bad: #e05050;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  header a { color: var(--dim); font-size: 13px; margin-right: auto; }
+  select, button {
+    font: inherit; color: var(--text); background: #2b2e36; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover, select:hover { background: #363a44; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 600; }
+  .ab { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .ab button { border: 0; border-radius: 0; }
+  .ab button[aria-pressed="true"] { background: #4a4e5a; font-weight: 600; }
+  main { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  #machines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 760px) { #machines { grid-template-columns: minmax(0, 1fr); } }
+  .machine { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .machine h2 { margin: 0; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; display: flex; gap: 8px; align-items: baseline; }
+  .machine h2 .tag { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #snes h2 { color: var(--snes); }
+  #tg16 h2 { color: var(--tg16); }
+  .stage { display: flex; justify-content: center; align-items: center; background: #000; border-radius: 8px; min-height: 224px; overflow: hidden; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  .stats { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .meter { margin: 4px 0; }
+  .meter .row { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+  .meter .row span:first-child { color: var(--dim); }
+  .bar { height: 5px; background: #2b2e36; border-radius: 3px; overflow: hidden; margin-top: 2px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  .bar i.warn { background: var(--warn); }
+  .bar i.bad { background: var(--bad); }
+  ul.msgs { margin: 6px 0 0; padding: 0; list-style: none; font-family: ui-monospace, monospace; font-size: 12px; }
+  ul.msgs li { padding: 3px 0; border-top: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; color: var(--warn); }
+  ul.msgs li.error { color: var(--bad); }
+  #status { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+  #about { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 16px 10px; }
+  #about h2 { font-size: 15px; margin: 10px 0 6px; }
+  #about h3 { font-size: 13px; margin: 12px 0 4px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+  #about p, #about li { max-width: 80ch; }
+  #about table { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+  #about th, #about td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
+  #about code { font-family: ui-monospace, monospace; font-size: 12px; background: #2b2e36; padding: 0 3px; border-radius: 3px; }
+  .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .hint { color: var(--dim); font-size: 12px; margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SNES vs TurboGrafx-16</h1>
+  <a href="./">TG16 viewer</a>
+  <select id="toy" title="Toy"></select>
+  <button id="sound" class="primary" title="Browsers need a click before playing sound">▶ Sound on</button>
+  <span class="ab" title="Hear one machine at a time">
+    <button id="hear-snes" aria-pressed="true">SNES</button><button id="hear-tg16" aria-pressed="false">TG16</button>
+  </span>
+  <button id="pause" title="Pause / resume (space)">Pause</button>
+  <button id="step" title="Advance one frame (.)" disabled>Step</button>
+  <button id="restart" title="Both machines from frame 0 (r)">Restart</button>
+</header>
+<main>
+  <div id="machines">
+    <section class="machine" id="snes">
+      <h2>SNES <span class="tag" id="snes-name"></span></h2>
+      <div class="stage"><canvas id="snes-screen" width="256" height="224"></canvas></div>
+      <div class="stats">
+        <div class="meter"><div class="row"><span>Sprites on busiest line</span><span id="s-spr">–</span></div><div class="bar"><i id="sb-spr"></i></div></div>
+        <div class="meter"><div class="row"><span>Sprite slivers on busiest line</span><span id="s-sliv">–</span></div><div class="bar"><i id="sb-sliv"></i></div></div>
+        <div class="meter"><div class="row"><span>S-DSP voices sounding</span><span id="s-voices">–</span></div><div class="bar"><i id="sb-voices"></i></div></div>
+        <div class="meter"><div class="row"><span>Mode 7 lines</span><span id="s-m7">–</span></div></div>
+        <div class="meter"><div class="row"><span>Echo buffer (ARAM)</span><span id="s-echo">–</span></div></div>
+        <div class="meter"><div class="row"><span>VRAM placed by dma()</span><span id="s-vram">–</span></div></div>
+        <ul class="msgs" id="snes-msgs"></ul>
+      </div>
+    </section>
+    <section class="machine" id="tg16">
+      <h2>TG16 <span class="tag" id="tg16-name"></span></h2>
+      <div class="stage"><canvas id="tg16-screen" width="256" height="224"></canvas></div>
+      <div class="stats">
+        <div class="meter"><div class="row"><span>CPU (estimate)</span><span id="t-cpu">–</span></div><div class="bar"><i id="tb-cpu"></i></div></div>
+        <div class="meter"><div class="row"><span>Raster lines</span><span id="t-raster">–</span></div></div>
+        <div class="meter"><div class="row"><span>Sprites</span><span id="t-spr">–</span></div><div class="bar"><i id="tb-spr"></i></div></div>
+        <div class="meter"><div class="row"><span>Peak line units</span><span id="t-units">–</span></div><div class="bar"><i id="tb-units"></i></div></div>
+        <div class="meter"><div class="row"><span>VRAM words / frame</span><span id="t-vram">–</span></div></div>
+        <div class="meter" id="t-soft-row" hidden><div class="row"><span>Software cycles</span><span id="t-soft">–</span></div><div class="bar"><i id="tb-soft"></i></div></div>
+        <ul class="msgs" id="tg16-msgs"></ul>
+      </div>
+    </section>
+  </div>
+  <div id="status">loading…</div>
+  <p class="hint">One clock drives both machines: every frame both get the same <code>t</code> and <code>f</code> and the same controller (arrows; Z/X = SNES B/A = TG16 II/I; A/S = Y/X; Q/W = L/R; Enter = Start/Run; Shift = Select). Keys: space pause, . step, r restart.</p>
+  <section id="about"></section>
+</main>
+<script type="module" src="compare.js"></script>
+</body>
+</html>

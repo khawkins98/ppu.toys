@@ -21,11 +21,12 @@
   }
   header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
   header .name { color: var(--accent); font-family: ui-monospace, monospace; margin-right: auto; }
-  button, label.btn {
+  a.btn { text-decoration: none; }
+  button, label.btn, a.btn {
     font: inherit; color: var(--text); background: #2b2e36; border: 1px solid var(--line);
     border-radius: 6px; padding: 5px 10px; cursor: pointer;
   }
-  button:hover, label.btn:hover { background: #363a44; }
+  button:hover, label.btn:hover, a.btn:hover { background: #363a44; }
   button:disabled { opacity: .45; cursor: default; }
   button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 600; }
   input[type=file] { display: none; }
@@ -74,6 +75,7 @@
   <button id="restart" title="Reload the toy from frame 0 (r)">Restart</button>
   <label class="btn" title="Open a .tg16.json pack, a .lua file, or .lua + .png files">Open…<input id="file" type="file" accept=".json,.lua,.png" multiple></label>
   <button id="demo" title="Load the built-in demo">Demo</button>
+  <a class="btn" href="compare.html" title="The same toys on the SNES and the TG16, side by side">SNES vs TG16 →</a>
 </header>
 <main>
   <div>
@@ -81,7 +83,7 @@
       <canvas id="screen" width="256" height="224"></canvas>
       <div id="drop">Drop a .tg16.json, .lua, or .lua + .png files</div>
     </div>
-    <p class="hint">Drag and drop a <code>.tg16.json</code> pack (from <code>ppu tg16 pack</code>), a single <code>.lua</code>, or several <code>.lua</code> and <code>.png</code> files. Keys: space pause, . step, r restart.</p>
+    <p class="hint">Drag and drop a <code>.tg16.json</code> pack (from <code>ppu tg16 pack</code>), a single <code>.lua</code>, or several <code>.lua</code> and <code>.png</code> files. Keys: space pause, . step, r restart. Joypad: arrows, X = I, Z = II, Enter = Run, Shift = Select.</p>
   </div>
   <aside>
     <section>

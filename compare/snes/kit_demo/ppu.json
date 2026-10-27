@@ -1,0 +1,8 @@
+{
+  "title": "Kit demo (SNES port)",
+  "description": "SNES port of the TG16 kit_demo toy: three BG layers for parallax, a Mode 7 road below an HDMA mode split, a colour-math ghost, a window letterbox and S-DSP music.",
+  "files": ["main.lua"],
+  "sources": [
+    { "name": "road", "kind": "m7", "options": {}, "file": "assets/road.png" }
+  ]
+}
