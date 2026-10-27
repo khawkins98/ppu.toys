@@ -468,6 +468,23 @@ Things the ports show about the two machines:
   palettes. The photo port splits the painting across BG1 and BG2 and gets
   half the palettes.
 
+The page's **TG16 strengths** group tests the TG16's usual claims against
+SNES toys written to do the same job well (`compare/snes/{swarm,patchwork,reef,copper}`
+next to `crates/tg16-core/toys/` of the same names):
+
+- **CPU** (`swarm`): the same flock logic on both; each side prices it as
+  hand-written assembly. At 52 drones the TG16 meter reads about 67% of a
+  frame and the SNES's 65816 estimate about 133%. Estimates, not emulated
+  slowdown: neither engine runs CPU code.
+- **Palettes** (`patchwork`): 16 + 16 palettes against 8 + 8; 480 colours on
+  screen against 240.
+- **The catch** (`reef`): a smooth painting rounds to few of the TG16's 512
+  colours, so the SNES, with half the palettes from 32,768 colours and a
+  free HDMA gradient, shows more distinct colours and looks smoother.
+- **Per-line colour** (`copper`): the TG16 rewrites 14 palette entries a
+  line (more than HDMA's 8 channels) for about 82% of its CPU; the SNES draws
+  the same sliding stripes with Mode 2 offset-per-tile for almost nothing.
+
 ## Not modelled yet
 
 SuperGrafx, CD audio, the HuC6280 CPU itself, and the interrupt timing of mid-line writes (the
