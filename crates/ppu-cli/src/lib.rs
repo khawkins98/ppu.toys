@@ -7,6 +7,7 @@ mod author;
 pub use author::*;
 mod docs;
 pub mod tg16;
+pub mod tg16_convert;
 pub use docs::docs;
 
 const MANIFEST: &str = "ppu.json";

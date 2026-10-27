@@ -16,6 +16,8 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
   ppu tg16 render <toy> --at seconds,... -o <directory>
   ppu tg16 check <toy> [--duration seconds] [--allow-overflow]
   ppu tg16 audio <toy> [--duration seconds] -o <file.wav>
+  ppu tg16 convert <snes-dir|file.ppu.json> -o <dir> [--duration seconds]
+            [--compare seconds,...]
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
@@ -23,6 +25,9 @@ and backward seeks with playback. --loop adds loop comparisons at sample times.
 render plays from zero to the last requested time and writes numbered PNGs.
 Times round to the nearest 60 Hz frame. PNG sources convert on every load.
 A tg16 <toy> is a directory, a .lua file, or a .tg16.json pack.
+tg16 convert plays an SNES toy (default 12 seconds) and writes a TG16 toy that
+runs its Lua through a compatibility layer, with CONVERT.md listing what the
+TG16 cannot do. --compare writes SNES|TG16 frames side by side to compare/.
 See ppu docs cli for manifests, examples, and supported features.";
 
 fn option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>> {
@@ -122,7 +127,7 @@ fn main() -> Result<()> {
 fn tg16(mut args: Vec<String>) -> Result<()> {
     ensure!(
         args.len() >= 2,
-        "usage: ppu tg16 <new|pack|unpack|render|check|audio> <path> ..."
+        "usage: ppu tg16 <new|pack|unpack|render|check|audio|convert> <path> ..."
     );
     let command = args.remove(0);
     let input = PathBuf::from(args.remove(0));
@@ -193,6 +198,25 @@ fn tg16(mut args: Vec<String>) -> Result<()> {
             let output = option(&mut args, "-o")?.context("audio requires -o <file.wav>")?;
             ensure!(args.is_empty(), "unknown audio arguments: {args:?}");
             ppu_cli::tg16::audio(&input, duration, Path::new(&output))?;
+        }
+        "convert" => {
+            let output = option(&mut args, "-o")?.context("convert requires -o <dir>")?;
+            let duration = option(&mut args, "--duration")?
+                .unwrap_or_else(|| "12".into())
+                .parse()
+                .context("invalid duration")?;
+            let compare = match option(&mut args, "--compare")? {
+                Some(t) => ppu_cli::parse_times(&t)?,
+                None => Vec::new(),
+            };
+            ensure!(args.is_empty(), "unknown convert arguments: {args:?}");
+            let report = ppu_cli::tg16_convert::convert(
+                &input,
+                Path::new(&output),
+                &ppu_cli::tg16_convert::ConvertOptions { duration, compare },
+            )?;
+            print!("{report}");
+            println!("\nWrote {output}. Try: ppu tg16 render {output} --at 0,2 -o previews");
         }
         _ => bail!("unknown tg16 command {command:?}; use ppu --help"),
     }
