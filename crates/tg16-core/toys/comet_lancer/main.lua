@@ -9,7 +9,7 @@
 -- After a game over, any button plays again.
 --
 -- What is 3D and how (the TG16 has no polygon hardware):
---   * The Lancer is real 3D: 13 flat-shaded polygons filled by the CPU into
+--   * The Lancer is real 3D: 17 flat-shaded polygons filled by the CPU into
 --     a 64x64 buffer every frame and sent to VRAM as two 32x64 sprites.
 --     cpu() charges the fill time to the budget meter.
 --   * Hornets, towers, rings, bolts and explosions are sprites picked from

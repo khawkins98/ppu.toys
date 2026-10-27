@@ -411,12 +411,12 @@ fixture matches to 0.002% of pixels, `sunset` to 0.06% and `kit_demo` to
 
 ## 3D on a TG16: Comet Lancer
 
-`crates/tg16-core/toys/comet_lancer/` is an on-rails 3D shooter in the
+`crates/tg16-core/toys/comet_lancer/` ([README](../../crates/tg16-core/toys/comet_lancer/README.md)) is an on-rails 3D shooter in the
 style of the polygon flying games of the early 90s. The SNES got those from
 a Super FX chip in the cartridge; the TG16 has nothing like it, so the toy
 fakes 3D the way the console could:
 
-- **The player's ship is real 3D.** 13 flat-shaded polygons are rotated,
+- **The player's ship is real 3D.** 17 flat-shaded polygons are rotated,
   projected and filled by the CPU into a 64x64 buffer every frame (painter's
   algorithm, four light levels per material) and uploaded as two 32x64
   sprites. Only 16x16 cells that have or had pixels are uploaded, so a level
