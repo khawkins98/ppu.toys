@@ -35,6 +35,54 @@ pub fn load_sources(path: &Path) -> Result<Vec<(String, String)>> {
         .collect()
 }
 
+/// Decode a PNG of any color type and depth to `(width, height, RGBA8)`.
+pub fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().context("invalid PNG")?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).context("invalid PNG")?;
+    let buf = &buf[..info.buffer_size()];
+    let mut rgba = Vec::with_capacity(info.width as usize * info.height as usize * 4);
+    for p in buf.chunks_exact(info.color_type.samples()) {
+        match info.color_type {
+            png::ColorType::Rgba => rgba.extend_from_slice(p),
+            png::ColorType::Rgb => rgba.extend_from_slice(&[p[0], p[1], p[2], 255]),
+            png::ColorType::Grayscale => rgba.extend_from_slice(&[p[0], p[0], p[0], 255]),
+            png::ColorType::GrayscaleAlpha => rgba.extend_from_slice(&[p[0], p[0], p[0], p[1]]),
+            png::ColorType::Indexed => bail!("PNG palette was not expanded"),
+        }
+    }
+    Ok((info.width, info.height, rgba))
+}
+
+/// A decoded image: `(name, width, height, RGBA8)`.
+pub type NamedImage = (String, u32, u32, Vec<u8>);
+
+/// Every `assets/*.png` of a toy directory, named by file stem, in name
+/// order.
+pub fn load_images(dir: &Path) -> Result<Vec<NamedImage>> {
+    let assets = dir.join("assets");
+    if !assets.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files: Vec<PathBuf> = fs::read_dir(&assets)
+        .with_context(|| format!("cannot read {}", assets.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")))
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|p| {
+            let bytes = fs::read(&p).with_context(|| format!("cannot read {}", p.display()))?;
+            let (w, h, rgba) = decode_png(&bytes).with_context(|| format!("{}", p.display()))?;
+            let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+            Ok((name, w, h, rgba))
+        })
+        .collect()
+}
+
 fn engine(path: &Path) -> Result<Engine> {
     let sources = load_sources(path)?;
     let refs: Vec<(&str, &str)> = sources
@@ -42,6 +90,11 @@ fn engine(path: &Path) -> Result<Engine> {
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
     let mut e = Engine::new();
+    if path.is_dir() {
+        for (name, w, h, rgba) in load_images(path)? {
+            e.add_image(&name, w, h, rgba);
+        }
+    }
     if let Err(err) = e.load(&refs) {
         bail!("{err}");
     }
