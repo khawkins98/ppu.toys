@@ -62,3 +62,10 @@ other plain-http origins the page falls back to a ScriptProcessor.
 | `pixels_ptr()`, `pixels_len()` | zero-copy view: `new Uint8ClampedArray(memory.buffer, ptr, len)` |
 | `audio()` | `Int16Array`, interleaved stereo at 44100 Hz, ~735 sample frames |
 | `budget_json()`, `warnings_json()` | JSON strings |
+
+## GitHub Pages
+
+`.github/workflows/tg16-pages.yml` builds this folder and publishes it on every
+push to `tg16-core` (turn on Settings → Pages → Source: "GitHub Actions").
+Every toy in `crates/tg16-core/toys/` is packed into `pkg/`, so
+`?toy=pkg/kit_demo.tg16.json` opens the kit demo.

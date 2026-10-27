@@ -29,13 +29,19 @@ if command -v wasm-opt >/dev/null; then
   wasm-opt -O2 "$here/pkg/tg16_core_bg.wasm" -o "$here/pkg/tg16_core_bg.wasm"
 fi
 
-# The built-in demo: the starter toy as a pack, in the `ppu tg16 pack` format.
-python3 - "$root/crates/tg16-core/toys/sunset.lua" "$here/pkg/demo.tg16.json" <<'PY'
-import json, sys
-src, out = sys.argv[1], sys.argv[2]
-pack = {"format": "ppu.toys/tg16", "version": 1, "name": "sunset",
-        "files": {"main.lua": open(src).read()}, "assets": {}}
-json.dump(pack, open(out, "w"))
+# The built-in demo (the starter toy) plus every example toy, as packs in
+# the `ppu tg16 pack` format: pkg/demo.tg16.json and pkg/<name>.tg16.json.
+python3 - "$root/crates/tg16-core/toys" "$here/pkg" <<'PY'
+import json, os, sys
+toys, out = sys.argv[1], sys.argv[2]
+def pack(name, path):
+    return {"format": "ppu.toys/tg16", "version": 1, "name": name,
+            "files": {"main.lua": open(path).read()}, "assets": {}}
+for f in sorted(os.listdir(toys)):
+    if f.endswith(".lua"):
+        name = f[:-4]
+        json.dump(pack(name, os.path.join(toys, f)), open(os.path.join(out, name + ".tg16.json"), "w"))
+json.dump(pack("sunset", os.path.join(toys, "sunset.lua")), open(os.path.join(out, "demo.tg16.json"), "w"))
 PY
 
 echo "built $here/pkg ($(du -h "$here/pkg/tg16_core_bg.wasm" | cut -f1) wasm)"

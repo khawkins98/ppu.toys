@@ -1,0 +1,55 @@
+# Builds the TG16 toy viewer (viewer/tg16) and publishes it to GitHub Pages.
+# Needs Settings -> Pages -> Source: "GitHub Actions".
+name: TG16 viewer on Pages
+
+on:
+  push:
+    branches: [tg16-core]
+    paths:
+      - "crates/tg16-core/**"
+      - "vendor/piccolo/**"
+      - "viewer/tg16/**"
+      - "Cargo.lock"
+      - ".github/workflows/tg16-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: tg16-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI (matches Cargo.lock)
+        run: |
+          v="$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)"
+          curl -sSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/wasm-bindgen-$v-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz --strip-components=1 -C /usr/local/bin "wasm-bindgen-$v-x86_64-unknown-linux-musl/wasm-bindgen"
+          wasm-bindgen --version
+      - name: Build viewer
+        run: viewer/tg16/build.sh
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: viewer/tg16
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
