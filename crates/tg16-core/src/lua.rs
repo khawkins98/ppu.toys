@@ -13,7 +13,7 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::import::{import_bg, import_sprites, Image};
+use crate::import::{import_bg_with, import_sprites_with, Dither, Image, Quality};
 use crate::psg::{period_for_hz, preset_wave, Psg, CHANNELS, SAMPLES_PER_FRAME};
 use crate::render::{render, Frame, LineRegs, Output, MAX_HEIGHT, MAX_WIDTH};
 use crate::vce::{grb, rgb8, Vce};
@@ -226,6 +226,84 @@ fn opt<'gc>(
     }
 }
 
+/// The `reduce` and `dither` options of the image functions: `None` when the
+/// import must be exact (`reduce = false`), otherwise the dither to reduce
+/// with (default ordered).
+fn reduce_opts<'gc>(
+    ctx: piccolo::Context<'gc>,
+    o: Option<Table<'gc>>,
+) -> Result<Option<Dither>, String> {
+    let Some(t) = o else {
+        return Ok(Some(Dither::default()));
+    };
+    let reduce = match t.get(ctx, "reduce") {
+        Value::Nil | Value::Boolean(true) => true,
+        Value::Boolean(false) => false,
+        _ => return Err("option reduce must be true or false".into()),
+    };
+    let dither = match t.get(ctx, "dither") {
+        Value::Nil => Dither::default(),
+        Value::Boolean(false) => Dither::None,
+        Value::String(s) => {
+            let s = s.to_str_lossy();
+            Dither::parse(&s).ok_or_else(|| {
+                format!("option dither must be \"none\", \"ordered\" or \"fs\", not {s:?}")
+            })?
+        }
+        _ => return Err("option dither must be \"none\", \"ordered\" or \"fs\"".into()),
+    };
+    Ok(reduce.then_some(dither))
+}
+
+/// Hint added to exact-import errors when the toy turned reduction off.
+const STRICT_HINT: &str = " (reduce = false is set; without it the importer reduces colors to fit)";
+
+/// The warning for an import that had to reduce, or `None` when exact.
+fn reduce_warning(func: &str, q: &Quality, max_palettes: i64, dither: Dither) -> Option<String> {
+    if !q.reduced() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if q.colors_reduced {
+        parts.push(format!(
+            "its {} colors did not fit {max_palettes} palette{} of 15, so they were reduced \
+             ({} dither)",
+            q.colors,
+            if max_palettes == 1 { "" } else { "s" },
+            dither.name()
+        ));
+    }
+    if q.merged_tiles > 0 {
+        parts.push(format!(
+            "{} similar tile{} merged to fit VRAM",
+            q.merged_tiles,
+            if q.merged_tiles == 1 {
+                " was"
+            } else {
+                "s were"
+            }
+        ));
+    }
+    Some(format!(
+        "{func}: {}; mean color error {:.1} (8-bit RGB). Pass reduce = false to make this \
+         an error.",
+        parts.join("; "),
+        q.error
+    ))
+}
+
+/// Set the quality fields of an import's result table.
+fn set_quality<'gc>(ctx: piccolo::Context<'gc>, out: Table<'gc>, q: &Quality, bg: bool) {
+    out.set(ctx, "reduced", q.reduced()).unwrap();
+    out.set(ctx, "colors", q.colors as i64).unwrap();
+    // Two decimals keep the number stable to print and compare.
+    out.set(ctx, "error", (q.error * 100.0).round() / 100.0)
+        .unwrap();
+    if bg {
+        out.set(ctx, "merged_tiles", q.merged_tiles as i64).unwrap();
+    }
+}
+
 /// `(name, opts)` arguments of the image functions.
 fn image_args<'gc>(
     ctx: piccolo::Context<'gc>,
@@ -292,10 +370,17 @@ fn image_bg_call<'gc>(
         Some(t) => MAX_TILES - t as usize,
         None => MAX_TILES - size.first_free_tile() as usize,
     };
-    let imp = import_bg(img, pals as usize, max_tiles).map_err(|m| e(m.to_string()))?;
+    let reduce = reduce_opts(ctx, o).map_err(e)?;
+    let imp = import_bg_with(img, pals as usize, max_tiles, reduce).map_err(|m| {
+        e(format!(
+            "{m}{}",
+            if reduce.is_none() { STRICT_HINT } else { "" }
+        ))
+    })?;
     if imp.width > size.width as usize || imp.height > size.height as usize {
         return Err(e(format!(
-            "image is {}x{} tiles but the BAT is {}x{}; set bat.w / bat.h (32, 64 or 128 by              32 or 64) before importing",
+            "image is {}x{} tiles but the BAT is {}x{}; set bat.w / bat.h (32, 64 or 128 by \
+             32 or 64) before importing",
             imp.width, imp.height, size.width, size.height
         )));
     }
@@ -337,6 +422,10 @@ fn image_bg_call<'gc>(
     set("h", imp.height);
     set("tile", first);
     set("pal", pal as usize);
+    set_quality(ctx, out, &imp.quality, true);
+    if let Some(w) = reduce_warning(&func, &imp.quality, pals, reduce.unwrap_or_default()) {
+        s.warn(w);
+    }
     Ok(out)
 }
 
@@ -366,8 +455,20 @@ fn image_sprites_call<'gc>(
     }
     let fw = opt(ctx, o, "w").map_err(e)?.unwrap_or(16);
     let fh = opt(ctx, o, "h").map_err(e)?.unwrap_or(16);
-    let imp = import_sprites(img, fw.max(0) as u32, fh.max(0) as u32, pals as usize)
-        .map_err(|m| e(m.to_string()))?;
+    let reduce = reduce_opts(ctx, o).map_err(e)?;
+    let imp = import_sprites_with(
+        img,
+        fw.max(0) as u32,
+        fh.max(0) as u32,
+        pals as usize,
+        reduce,
+    )
+    .map_err(|m| {
+        e(format!(
+            "{m}{}",
+            if reduce.is_none() { STRICT_HINT } else { "" }
+        ))
+    })?;
     let n = imp.patterns.len();
     let first = match pattern {
         Some(p) => {
@@ -385,14 +486,13 @@ fn image_sprites_call<'gc>(
             }
             p as usize
         }
-        None => s
-            .find_free(size.words(), 64, n, imp.cells)
-            .ok_or_else(|| {
-                e(format!(
-                    "no free VRAM run for {n} sprite patterns above the {}-word BAT; pass                      pattern = N",
-                    size.words()
-                ))
-            })?,
+        None => s.find_free(size.words(), 64, n, imp.cells).ok_or_else(|| {
+            e(format!(
+                "no free VRAM run for {n} sprite patterns above the {}-word BAT; pass \
+                     pattern = N",
+                size.words()
+            ))
+        })?,
     };
     for (i, px) in imp.patterns.iter().enumerate() {
         let p = first + i;
@@ -416,6 +516,10 @@ fn image_sprites_call<'gc>(
         frame_pals.set(ctx, i as i64 + 1, pal + p as i64).unwrap();
     }
     out.set(ctx, "pals", frame_pals).unwrap();
+    set_quality(ctx, out, &imp.quality, false);
+    if let Some(w) = reduce_warning(&func, &imp.quality, pals, reduce.unwrap_or_default()) {
+        s.warn(w);
+    }
     Ok(out)
 }
 

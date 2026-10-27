@@ -67,5 +67,8 @@ other plain-http origins the page falls back to a ScriptProcessor.
 
 `.github/workflows/tg16-pages.yml` builds this folder and publishes it on every
 push to `tg16-core` (turn on Settings → Pages → Source: "GitHub Actions").
-Every toy in `crates/tg16-core/toys/` is packed into `pkg/`, so
-`?toy=pkg/kit_demo.tg16.json` opens the kit demo.
+Every toy in `crates/tg16-core/toys/` is packed into `pkg/`: single-file toys
+(`toys/<name>.lua`) and toy directories (`toys/<name>/` with `main.lua`, other
+`.lua` files and `assets/*.png`, packed with their images). So
+`?toy=pkg/kit_demo.tg16.json` opens the kit demo and `?toy=pkg/photo.tg16.json`
+the color-reduced photo.

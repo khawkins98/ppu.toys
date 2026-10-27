@@ -30,18 +30,37 @@ if command -v wasm-opt >/dev/null; then
 fi
 
 # The built-in demo (the starter toy) plus every example toy, as packs in
-# the `ppu tg16 pack` format: pkg/demo.tg16.json and pkg/<name>.tg16.json.
+# the `ppu tg16 pack` format (docs/tg16/GUIDE.md, "Packing"):
+# pkg/demo.tg16.json and pkg/<name>.tg16.json. An example toy is either a
+# single toys/<name>.lua or a directory toys/<name>/ holding main.lua, any
+# other top-level *.lua and PNGs in assets/.
 python3 - "$root/crates/tg16-core/toys" "$here/pkg" <<'PY'
-import json, os, sys
+import base64, json, os, sys
 toys, out = sys.argv[1], sys.argv[2]
-def pack(name, path):
-    return {"format": "ppu.toys/tg16", "version": 1, "name": name,
-            "files": {"main.lua": open(path).read()}, "assets": {}}
-for f in sorted(os.listdir(toys)):
-    if f.endswith(".lua"):
-        name = f[:-4]
-        json.dump(pack(name, os.path.join(toys, f)), open(os.path.join(out, name + ".tg16.json"), "w"))
-json.dump(pack("sunset", os.path.join(toys, "sunset.lua")), open(os.path.join(out, "demo.tg16.json"), "w"))
+def write(name, files, assets):
+    pack = {"format": "ppu.toys/tg16", "version": 1, "name": name,
+            "files": files, "assets": assets}
+    with open(os.path.join(out, name + ".tg16.json"), "w") as f:
+        json.dump(pack, f, sort_keys=True)
+def read(path):
+    with open(path) as f:
+        return f.read()
+for entry in sorted(os.listdir(toys)):
+    path = os.path.join(toys, entry)
+    if os.path.isfile(path) and entry.endswith(".lua"):
+        write(entry[:-4], {"main.lua": read(path)}, {})
+    elif os.path.isdir(path) and os.path.isfile(os.path.join(path, "main.lua")):
+        files = {f: read(os.path.join(path, f)) for f in sorted(os.listdir(path))
+                 if f.endswith(".lua") and os.path.isfile(os.path.join(path, f))}
+        assets = {}
+        adir = os.path.join(path, "assets")
+        if os.path.isdir(adir):
+            for f in sorted(os.listdir(adir)):
+                if f.lower().endswith(".png") and os.path.isfile(os.path.join(adir, f)):
+                    with open(os.path.join(adir, f), "rb") as fh:
+                        assets[f] = base64.b64encode(fh.read()).decode("ascii")
+        write(entry, files, assets)
+write("demo", {"main.lua": read(os.path.join(toys, "sunset.lua"))}, {})
 PY
 
 echo "built $here/pkg ($(du -h "$here/pkg/tg16_core_bg.wasm" | cut -f1) wasm)"

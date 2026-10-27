@@ -430,3 +430,323 @@ function frame(t, f) if f == 1 then image_bg("scene", { y = 8 }) end end
     e.render(0.0, 1).unwrap();
     assert!(e.budget().vram_words > 0);
 }
+
+// --- Color reduction -------------------------------------------------------
+
+/// A colorful 64x32 image: smooth hue and brightness ramps, so most tiles
+/// hold far more than 15 colors and the image needs many palettes.
+fn ramps() -> Image {
+    image(64, 32, |x, y| {
+        let r = (x * 4) as u8;
+        let g = (y * 8) as u8;
+        let b = 255 - ((x + y) * 3) as u8;
+        [r, g, b, 255]
+    })
+}
+
+/// Distinct colors a palette really uses: the colors its cells index.
+fn used_colors(b: &BgImport) -> Vec<std::collections::BTreeSet<u16>> {
+    let mut used = vec![std::collections::BTreeSet::new(); b.palettes.len()];
+    for &(t, p) in &b.map {
+        for &i in &b.tiles[t as usize] {
+            if i != 0 {
+                used[p as usize].insert(b.palettes[p as usize][i as usize]);
+            }
+        }
+    }
+    used
+}
+
+#[test]
+fn reduction_respects_palette_limits() {
+    let img = ramps();
+    assert!(
+        import_bg(&img, 4, 2048).is_err(),
+        "too colorful to fit exactly"
+    );
+    for dither in [Dither::None, Dither::Ordered, Dither::Diffuse] {
+        for max in [1, 2, 4] {
+            let b = import_bg_with(&img, max, 2048, Some(dither)).unwrap();
+            assert!(
+                b.palettes.len() <= max,
+                "{dither:?} {max}: {}",
+                b.palettes.len()
+            );
+            assert!(b.map.iter().all(|&(_, p)| (p as usize) < b.palettes.len()));
+            for (p, used) in used_colors(&b).iter().enumerate() {
+                assert!(used.len() <= 15, "palette {p} uses {}", used.len());
+            }
+            for t in &b.tiles {
+                assert!(t.iter().all(|&i| i <= 15));
+            }
+            let q = &b.quality;
+            assert!(q.colors_reduced && q.reduced(), "{q:?}");
+            assert_eq!(q.merged_tiles, 0);
+            assert!(q.colors > 15 * max, "{q:?}");
+            assert!(q.error > 0.0 && q.error < 60.0, "{dither:?} {max}: {q:?}");
+        }
+    }
+}
+
+#[test]
+fn more_palettes_mean_less_error() {
+    let img = ramps();
+    let err = |max| {
+        import_bg_with(&img, max, 2048, Some(Dither::None))
+            .unwrap()
+            .quality
+            .error
+    };
+    let (one, four, sixteen) = (err(1), err(4), err(16));
+    assert!(one > four && four > sixteen, "{one} {four} {sixteen}");
+}
+
+#[test]
+fn reduction_is_deterministic() {
+    let img = ramps();
+    for dither in [Dither::None, Dither::Ordered, Dither::Diffuse] {
+        let a = import_bg_with(&img, 3, 2048, Some(dither)).unwrap();
+        let b = import_bg_with(&img, 3, 2048, Some(dither)).unwrap();
+        assert_eq!(a, b, "{dither:?}");
+    }
+    let a = import_sprites_with(&img, 32, 32, 2, Some(Dither::Diffuse)).unwrap();
+    assert_eq!(
+        a,
+        import_sprites_with(&img, 32, 32, 2, Some(Dither::Diffuse)).unwrap()
+    );
+}
+
+#[test]
+fn images_that_fit_are_not_reduced() {
+    for img in [
+        scene(),
+        image(16, 8, |x, y| level((y * 8 + x % 8) % 15 + 1)),
+    ] {
+        let exact = import_bg(&img, 16, 2048).unwrap();
+        for dither in [Dither::None, Dither::Ordered, Dither::Diffuse] {
+            let b = import_bg_with(&img, 16, 2048, Some(dither)).unwrap();
+            assert_eq!(b, exact);
+            assert!(!b.quality.reduced());
+            assert_eq!(b.quality.error, 0.0);
+        }
+    }
+}
+
+#[test]
+fn dither_modes_differ_and_ordered_keeps_flat_tiles_shared() {
+    // Left half: a ramp that needs reducing; right half: one flat color
+    // between two 9-bit levels, so dithering patterns it.
+    let img = image(64, 16, |x, y| {
+        if x < 32 {
+            [(x * 8) as u8, (y * 16) as u8, 128, 255]
+        } else {
+            [90, 150, 200, 255]
+        }
+    });
+    let none = import_bg_with(&img, 1, 2048, Some(Dither::None)).unwrap();
+    let ordered = import_bg_with(&img, 1, 2048, Some(Dither::Ordered)).unwrap();
+    let fs = import_bg_with(&img, 1, 2048, Some(Dither::Diffuse)).unwrap();
+    assert_ne!(none.tiles, ordered.tiles);
+    assert_ne!(ordered.tiles, fs.tiles);
+    // The flat right half (tiles 4..8 of each row) is one tile under
+    // nearest-color and ordered dither: the Bayer pattern is aligned to
+    // the image, so every flat 8x8 block dithers the same way.
+    for b in [&none, &ordered] {
+        let flat: std::collections::BTreeSet<u16> =
+            (0..16).filter(|i| i % 8 >= 4).map(|i| b.map[i].0).collect();
+        assert_eq!(flat.len(), 1, "{flat:?}");
+    }
+    let flat_tile = &ordered.tiles[ordered.map[4].0 as usize];
+    let distinct: std::collections::BTreeSet<u8> = flat_tile.iter().copied().collect();
+    assert!(distinct.len() > 1, "ordered dither patterns the flat color");
+}
+
+#[test]
+fn diffusion_does_not_cross_sprite_frames() {
+    // Frame 0 is a ramp that dithers, frame 1 a single flat color in its
+    // palette: no error may leak into frame 1.
+    let img = image(32, 16, |x, y| {
+        if x < 16 {
+            [(x * 16) as u8, (y * 16) as u8, 60, 255]
+        } else {
+            [255, 255, 255, 255]
+        }
+    });
+    let s = import_sprites_with(&img, 16, 16, 1, Some(Dither::Diffuse)).unwrap();
+    assert!(s.quality.colors_reduced);
+    let p = &s.patterns[1];
+    assert!(p.iter().all(|&i| i == p[0]), "frame 1 stays flat");
+    assert_eq!(s.palettes[0][p[0] as usize], rgb8(255, 255, 255));
+}
+
+#[test]
+fn sprite_reduction_fits_one_palette_per_frame() {
+    let img = ramps();
+    assert!(import_sprites(&img, 32, 32, 1).is_err());
+    let s = import_sprites_with(&img, 32, 32, 1, Some(Dither::Ordered)).unwrap();
+    assert_eq!(s.palettes.len(), 1);
+    assert_eq!(s.frames(), 2);
+    assert_eq!(s.patterns.len(), 8);
+    let used: std::collections::BTreeSet<u8> = s.patterns.iter().flatten().copied().collect();
+    assert!(used.len() <= 15 && !used.contains(&0), "{used:?}");
+    assert!(s.quality.reduced() && s.quality.error > 0.0);
+    // Two palettes: each frame may get its own.
+    let s2 = import_sprites_with(&img, 32, 32, 2, Some(Dither::Ordered)).unwrap();
+    assert!(s2.quality.error < s.quality.error);
+}
+
+#[test]
+fn merging_tiles_fits_the_tile_budget() {
+    // Eight tiles: four solid colors, each also with a variant that has one
+    // pixel slightly off. Merging the variants costs least.
+    let base = [RED, GREEN, BLUE, WHITE];
+    let img = image(64, 8, |x, y| {
+        let t = (x / 8) as usize;
+        let c = base[t % 4];
+        if t >= 4 && x % 8 == 3 && y == 3 {
+            [c[0] / 2 + 60, c[1] / 2 + 60, c[2] / 2 + 60, 255]
+        } else {
+            c
+        }
+    });
+    let exact = import_bg(&img, 16, 8).unwrap();
+    assert_eq!(exact.tiles.len(), 8);
+    let e = import_bg(&img, 16, 4).unwrap_err();
+    assert!(e.0.contains("8 unique tiles but only 4 fit"), "{e}");
+    let b = import_bg_with(&img, 16, 4, Some(Dither::Ordered)).unwrap();
+    assert_eq!(b.tiles.len(), 4);
+    assert_eq!(b.quality.merged_tiles, 4);
+    assert!(!b.quality.colors_reduced);
+    assert!(b.quality.reduced());
+    assert!(
+        b.quality.error > 0.0 && b.quality.error < 5.0,
+        "{:?}",
+        b.quality
+    );
+    for t in 0..4 {
+        assert_eq!(
+            b.map[t].0,
+            b.map[t + 4].0,
+            "variant {t} merged into its base"
+        );
+    }
+    assert!(
+        b.tiles.iter().all(|t| t.iter().all(|&i| i == t[0])),
+        "solid tiles kept"
+    );
+
+    // Tiles whose transparent pixels differ never merge.
+    let holes = image(32, 8, |x, y| {
+        if y as usize == (x / 8) as usize {
+            CLEAR
+        } else {
+            RED
+        }
+    });
+    let e = import_bg_with(&holes, 16, 2, Some(Dither::Ordered)).unwrap_err();
+    assert!(e.0.contains("even after merging"), "{e}");
+}
+
+#[test]
+fn dither_names_parse() {
+    assert_eq!(Dither::parse("none"), Some(Dither::None));
+    assert_eq!(Dither::parse("ordered"), Some(Dither::Ordered));
+    assert_eq!(Dither::parse("fs"), Some(Dither::Diffuse));
+    assert_eq!(Dither::parse("wobble"), None);
+    assert_eq!(Dither::default(), Dither::Ordered);
+}
+
+#[test]
+fn lua_reduces_by_default_and_reports_quality() {
+    let src = r#"
+function init()
+  bat.w = 64
+  b = image_bg("ramps", { pals = 2 })
+  assert(b.reduced == true, "reduced")
+  assert(b.palettes <= 2, "palettes " .. b.palettes)
+  assert(b.colors > 30, "colors " .. b.colors)
+  assert(b.error > 0 and b.error < 60, "error " .. b.error)
+  assert(b.merged_tiles == 0, "merged " .. b.merged_tiles)
+  s = image_sprites("ramps", { w = 32, h = 32, pals = 1, dither = "fs" })
+  assert(s.reduced == true and s.palettes == 1 and s.merged_tiles == nil)
+  e = image_bg("scene", { y = 8 })
+  assert(e.reduced == false and e.error == 0 and e.merged_tiles == 0)
+end
+"#;
+    let e = engine_with(&[("ramps", &ramps()), ("scene", &scene())], src)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let w = e.warnings();
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(
+        w[0].starts_with("image_bg(\"ramps\"): its ")
+            && w[0].contains("did not fit 2 palettes of 15")
+            && w[0].contains("(ordered dither)")
+            && w[0].contains("mean color error"),
+        "{w:?}"
+    );
+    assert!(w[1].contains("image_sprites(\"ramps\")") && w[1].contains("(fs dither)"));
+}
+
+#[test]
+fn lua_reduction_is_deterministic_on_screen() {
+    let src = r#"
+function init() image_bg("ramps", { pals = 3, dither = "ordered" }) end
+"#;
+    let render = || {
+        let mut e = engine_with(&[("ramps", &ramps())], src).unwrap();
+        e.render(0.0, 0).unwrap().rgba
+    };
+    assert_eq!(render(), render());
+}
+
+#[test]
+fn lua_reduce_false_keeps_the_strict_error() {
+    let src = "function init() image_bg(\"ramps\", { pals = 2, reduce = false }) end";
+    let err = engine_with(&[("ramps", &ramps())], src).err().unwrap();
+    assert!(err.message.contains("image_bg(\"ramps\")"), "{err}");
+    assert!(err.message.contains("reduce = false is set"), "{err}");
+
+    let src = "function init() image_sprites(\"ramps\", { w = 32, h = 32, pals = 1, reduce = false }) end";
+    let err = engine_with(&[("ramps", &ramps())], src).err().unwrap();
+    assert!(err.message.contains("colors"), "{err}");
+
+    let bad = [
+        ("{ dither = \"wobble\" }", "option dither must be"),
+        ("{ dither = 3 }", "option dither must be"),
+        ("{ reduce = 1 }", "option reduce must be true or false"),
+    ];
+    for (opts, want) in bad {
+        let src = format!("function init() image_bg(\"scene\", {opts}) end");
+        let err = engine_with(&[("scene", &scene())], &src).err().unwrap();
+        assert!(err.message.contains(want), "{opts}: {err}");
+    }
+}
+
+#[test]
+fn lua_merged_tiles_are_reported() {
+    // Room for only 4 tiles at the top of VRAM: the 8-tile image merges.
+    let base = [RED, GREEN, BLUE, WHITE];
+    let img = image(64, 8, |x, y| {
+        let t = (x / 8) as usize;
+        let c = base[t % 4];
+        if t >= 4 && x % 8 == 3 && y == 3 {
+            [c[0] / 2 + 60, c[1] / 2 + 60, c[2] / 2 + 60, 255]
+        } else {
+            c
+        }
+    });
+    let src = r#"
+function init()
+  b = image_bg("tiles", { tile = 2044 })
+  assert(b.tiles == 4 and b.merged_tiles == 4 and b.reduced, "tiles " .. b.tiles)
+end
+"#;
+    let e = engine_with(&[("tiles", &img)], src).unwrap_or_else(|e| panic!("{e}"));
+    let w = e.warnings();
+    assert!(
+        w.iter()
+            .any(|w| w.contains("4 similar tiles were merged to fit VRAM")
+                && !w.contains("did not fit")),
+        "{w:?}"
+    );
+}

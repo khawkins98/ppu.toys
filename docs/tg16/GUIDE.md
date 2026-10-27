@@ -110,15 +110,18 @@ Sound registers are read once per frame, after `frame()` returns.
 Put PNGs in the toy directory's `assets/` folder and import them by file
 stem: `assets/hills.png` is `"hills"`. Any PNG works (palette, gray, RGB,
 RGBA). Colors are rounded to the 9-bit palette; pixels with alpha below 128
-are transparent (color 0). The importers never drop colors: if an image does
-not fit, the error says why (which tile has too many colors, how many palettes
-it needs, how many tiles).
+are transparent (color 0). An image that fits the hardware as it is (at most
+15 colors per tile or sprite frame, few enough palettes and tiles) is imported
+exactly. One that does not is reduced to fit, and the import says so in a
+warning (see [Color reduction](#color-reduction)); pass `reduce = false` to
+get an error instead that says what does not fit.
 
 ```lua
 function init()
   bat.w = 64                       -- set the map size first
   local bg = image_bg("hills", { x = 0, y = 4 })
-  -- bg.tiles, bg.palettes, bg.w, bg.h (in tiles), bg.tile, bg.pal
+  -- bg.tiles, bg.palettes, bg.w, bg.h (in tiles), bg.tile, bg.pal,
+  -- bg.reduced, bg.colors, bg.error, bg.merged_tiles
   hero = image_sprites("hero", { w = 32, h = 32 })
   -- hero.patterns, hero.palettes, hero.frames, hero.pattern, hero.step, hero.pal, hero.pals
 end
@@ -141,8 +144,13 @@ BAT. Options, all optional:
 | `tile` | first free run above the BAT | first tile number |
 | `pal` | lowest background palette nothing has set yet | first palette |
 | `pals` | `16 - pal` | most palettes it may use |
+| `reduce` | `true` | reduce colors and merge tiles when the image does not fit; `false` makes that an error |
+| `dither` | `"ordered"` | how reduced colors are drawn: `"ordered"`, `"fs"` or `"none"` |
 
-The image must fit in `bat.w` x `bat.h` tiles.
+The image must fit in `bat.w` x `bat.h` tiles. Besides the counts and
+placement, the result has `reduced` (true when anything was lost), `colors`
+(distinct 9-bit colors in the image), `error` (mean color error, 0 when exact)
+and `merged_tiles`.
 
 `image_sprites(name, opts)` cuts a sheet into frames of `w` x `h` pixels
 (default 16x16; `w` 16 or 32, `h` 16, 32 or 64), read left to right, top to
@@ -151,13 +159,63 @@ size reads them. Frame `k` starts at pattern `pattern + k * step`. All cells
 of a frame share one palette; `pals[k + 1]` is frame `k`'s palette (with one
 palette they are all `pal`). Options: `pattern` (default: the first free run
 above the BAT, aligned for the frame size), `pal` (lowest sprite palette not
-yet set), `pals` (default `16 - pal`), `w`, `h`.
+yet set), `pals` (default `16 - pal`), `w`, `h`, `reduce`, `dither`. The
+result has `reduced`, `colors` and `error` like `image_bg`'s.
 
 Defaults never overlap each other or anything `tile()`, `pattern()` and
 `map()` wrote earlier, and palettes that `pal()`/`spal()` set are skipped.
 Explicit numbers that overlap get the usual VRAM or palette warning. Imports
 in `init()` are free in the budget meter; in `frame()` they count as VRAM
 uploads.
+
+### Color reduction
+
+When an image has more colors than its tiles can show, the importer:
+
+1. dithers the image to the full 512-color space (with the chosen `dither`),
+   so every pixel has the 9-bit color it would show if any color were
+   allowed;
+2. groups the tiles (or sprite frames) into at most `pals` palettes and picks
+   15 colors for each: each new palette is made for the tile drawn worst so
+   far, then tiles move to the palette that draws them best and palettes are
+   rebuilt from their tiles (median cut, refined by k-means) until nothing
+   changes;
+3. redraws every pixel with its tile's palette and the same dither;
+4. for backgrounds, if more unique tiles remain than fit in VRAM (the free run
+   at `tile`, up to tile 2047), merges the most similar ones: a tile's cells
+   switch to the tile that draws them with the least error. Tiles whose
+   transparent pixels differ never merge.
+
+| `dither` | Looks | VRAM |
+| --- | --- | --- |
+| `"ordered"` (default) | an 8x8 Bayer pattern; the classic console look | flat areas still make identical tiles, because the pattern is aligned to the image |
+| `"fs"` | Floyd–Steinberg error diffusion: smoothest gradients, grainier | noisy tiles rarely repeat, so it needs more tiles (and merges sooner) |
+| `"none"` | nearest color: flat areas stay flat, gradients band | fewest tiles |
+
+Sprite frames are separate sprites, so diffused error never crosses from one
+frame into the next.
+
+The result is deterministic: the same PNG and options always give the same
+tiles and palettes. Each reduced import adds a warning, which `ppu tg16 check`
+and `render` print:
+
+```text
+warning: image_bg("lake"): its 65 colors did not fit 16 palettes of 15, so they were reduced (ordered dither); mean color error 1.6 (8-bit RGB). Pass reduce = false to make this an error.
+```
+
+`error` is the mean distance, in 8-bit RGB units (0..441), between what each
+pixel shows and what the dithered image of step 1 wanted, both averaged over
+3x3 pixels so dither noise that evens out on screen does not count. Under 3 is
+hard to tell apart from the full-palette dither; 5 to 10 shows as blotches or
+color shifts in places; much more means the image needs more palettes or
+fewer colors. "Distinct colors" counts 9-bit colors, which is why a photo with
+thousands of colors may report a few dozen: the problem is usually that a
+tile has more than 15 of them, or that tiles need too many different
+palettes, not the total.
+
+`crates/tg16-core/toys/photo/` is an example: a painted 512x224 panorama
+(about 24,000 colors) imported with ordered dither and scrolled with raster
+parallax.
 
 ## Kit helpers
 
