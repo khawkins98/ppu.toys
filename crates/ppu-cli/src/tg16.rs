@@ -473,3 +473,36 @@ pub fn audio(path: &Path, duration: f64, out: &Path) -> Result<()> {
     println!("{} ({duration}s)", out.display());
     Ok(())
 }
+
+/// Record `duration` seconds of a toy and write a HuCard ROM (`.pce`) that
+/// replays it on a PC Engine / TurboGrafx-16. Returns the build stats; prints
+/// a summary and warnings for frames that will not keep up on hardware.
+pub fn rom(path: &Path, duration: f64, looping: bool, out: &Path) -> Result<tg16_core::RomStats> {
+    let frames = crate::frame_number(duration)?;
+    ensure!(frames > 0, "duration must be at least one frame");
+    let mut e = engine(path)?;
+    let rom = tg16_core::rom::export(&mut e, &tg16_core::RomOptions { frames, looping })
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    for w in e.warnings() {
+        eprintln!("warning: {w}");
+    }
+    fs::write(out, &rom.bytes).with_context(|| format!("cannot write {}", out.display()))?;
+    let s = &rom.stats;
+    println!(
+        "{} ({} frames, {}; {} KB ROM, stream {} bytes)",
+        out.display(),
+        s.frames,
+        if looping { "looping" } else { "then holds" },
+        s.rom_bytes / 1024,
+        s.stream_bytes
+    );
+    println!(
+        "  vertical blank: busiest frame {} needs ~{} of {} cycles; up to {} VRAM words",
+        s.peak_vblank_frame, s.peak_vblank_cycles, s.vblank_cycles, s.peak_vram_words
+    );
+    println!("  raster events:  up to {} per frame", s.peak_raster_events);
+    for w in rom.warnings() {
+        eprintln!("warning: {w}");
+    }
+    Ok(rom.stats)
+}

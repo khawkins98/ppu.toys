@@ -33,3 +33,6 @@ pub use budget::{Budget, CYCLES_PER_FRAME};
 
 #[cfg(all(target_arch = "wasm32", feature = "bindings"))]
 mod wasm;
+
+pub mod rom;
+pub use rom::{Rom, RomError, RomOptions, RomStats};

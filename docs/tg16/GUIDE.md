@@ -12,6 +12,7 @@ ppu tg16 new my-toy
 ppu tg16 render my-toy --at 0,1,2 -o previews
 ppu tg16 check my-toy --duration 10
 ppu tg16 audio my-toy --duration 8 -o my-toy.wav
+ppu tg16 rom my-toy --duration 20 --loop -o my-toy.pce
 ```
 
 A toy is a `.lua` file, a directory of them (run in name order, `main.lua`
@@ -52,7 +53,11 @@ There is no brightness register: fade by rewriting palettes.
 ## Background
 
 - `bg.scroll.x`, `bg.scroll.y`: scroll the layer (wraps around the BAT).
-- `show.bg`, `show.sprites`: the enable bits.
+- `show.bg`, `show.sprites`: the enable bits. With the layer off and sprites
+  on, empty pixels show entry 256 (sprite palette 0 color 0, the overscan
+  color) instead of the backdrop; with both off they show the backdrop. If
+  both are off on line 0, the VDC blanks the whole frame in the overscan
+  color ("burst mode"), whatever later lines turn back on.
 - `display.width` (256, up to 512 with the faster dot clocks) and
   `display.height` (224 or 240).
 
@@ -80,7 +85,9 @@ Inside it you can change `bg.scroll.x`, `bg.scroll.y`, `show.*` and the palette.
 - `bg.scroll.y = v` inside a hook means "this line shows map row `v + y`", the
   same offset meaning SNES toys use. Assign the raw `BYR` instead for the
   hardware behaviour: the line shows row `BYR`, and the lines below continue
-  from there. That is how floors and stretches are drawn.
+  from there. That is how floors and stretches are drawn. (This is the
+  register's effect, not the exact write: a ROM writes `BYR - 1` on the line
+  before; see [ROM export](#rom-export).)
 - Sprites cannot change mid-frame.
 
 Each line a hook runs on costs a raster interrupt in the CPU estimate, so give
@@ -169,7 +176,7 @@ All are plain Lua in `crates/tg16-core/src/kit.lua`; read it to see the trick.
 | `kit.sprite_layer{first, count, pattern, w, h, y, x, spacing, pal, front}` | an extra layer | a wrapping row of sprites; returns the next free sprite |
 | `kit.floor{horizon, bottom, z, x, height, curve, row0, rows}` | Mode 7 floors and roads | a `BYR` reload and a sideways shift on every floor line |
 | `kit.flicker(f, phase)`, `kit.flicker_spr(f, i, x, y, pattern, opts)` | color-math transparency | draw on alternate frames |
-| `kit.mask_lines(y0, y1, color)` | windows (horizontal) | hide the layers on those lines and flatten the backdrop |
+| `kit.mask_lines(y0, y1, color)` | windows (horizontal) | hide the layers on those lines and flatten the backdrop (sprites stay on for line 0, to avoid burst mode) |
 | `kit.mask_columns(first, x, width, y0, y1, pattern, pal)` | windows (vertical) | solid front sprites |
 
 ## The budget meter
@@ -215,8 +222,88 @@ directory, and the browser viewer loads the same file.
 - Readers ignore unknown top-level keys and reject another `format` or a
   `version` newer than they know.
 
+## ROM export
+
+`ppu tg16 rom my-toy --duration 20 -o my-toy.pce` writes a HuCard image
+that plays the toy on a PC Engine / TurboGrafx-16 or in an emulator. Lua
+does not run on the console: the toy is played in the engine for
+`--duration` seconds (default 10), and every frame's changes are recorded and
+replayed by a small HuC6280 player. With `--loop` the ROM jumps back to the
+start after the last frame; without it, it holds the last picture and
+silences the sound.
+
+What a frame records, and when the player applies it:
+
+- In vertical blank: VRAM words that changed (map, tiles, patterns), palette
+  entries that changed (including restoring entries the last frame's hooks
+  changed), BXR, BYR and the enable bits for line 0, line 0's hook palette
+  writes, PSG register writes, and the next frame's sprite table (it reaches
+  the VDC by SATB DMA at the start of the next vertical blank).
+- In raster interrupts: one per line where a hook changed something. BXR and
+  palette writes for line `y` run from the interrupt for line `y`; BYR and the
+  enable bits run a line earlier, because the VDC latches them sooner. A raw
+  `BYR = v` written on line `y` is sent as `v - 1`: after a mid-frame write the
+  VDC steps its row counter before drawing the next line.
+
+On hardware, a palette write from a raster hook lands a few pixels into its
+line (about 5 to 40, depending on how much else that hook does), so the left
+edge of that line keeps the old color. Put color splits where that does not
+show, or change entries the line's left edge does not use.
+
+`ppu tg16 rom` prints the ROM size and the busiest frame's vertical-blank
+cost, and warns about frames that will not keep up:
+
+- More VRAM, palette and sprite-table writes than fit in vertical blank (the
+  same ~1400-word budget `ppu tg16 check` uses): the picture tears on that
+  frame and its first raster events can be missed.
+- A raster hook with too many palette writes to finish within its line.
+
+It fails when the recording does not fit a 1 MB HuCard (about 300 to 600
+bytes per frame for a toy that only scrolls and moves sprites; every changed
+VRAM word adds 2 bytes), when `display.width`, `display.height` or the map
+size change after frame 0, or when a hook makes more than 48 palette writes on
+one line. The sprite table needs a 256-word block of VRAM nothing on screen
+uses; the exporter picks the highest free one.
+
+Timing is set for the toy's `display.width` and `display.height`. 256 x 224
+is checked against the Mednafen emulator (see below); other sizes use derived
+VDC timing that has not been checked.
+
+### Layout
+
+| ROM | Contents |
+| --- | --- |
+| bank 0 (`$E000-$FFFF` at reset) | the player (`crates/tg16-core/player/player.s`), a config block at `$FF00` (VDC timing, MWR, dot clock, SATB address, first record), vectors |
+| banks 1.. | the stream: a boot record that loads frame 0's memory with the display off, one record per frame, then the loop or hold record |
+
+The stream is read through two 8 KB windows (`MPR2/3` at `$4000` for
+vertical-blank commands, `MPR4/5` at `$8000` for raster events). Each record
+starts with a pointer to the next one, so a looping ROM jumps back by
+pointer. The ROM is padded to a power of two. The byte format is documented
+at the top of `crates/tg16-core/src/rom.rs`.
+
+The player's binary, `player/player.bin`, is committed so `cargo build`
+needs no assembler. After editing `player.s`, run `player/build.sh` (needs
+cc65); `cargo test -p tg16-core` fails if the binary no longer matches the
+source and cc65 is installed.
+
+### Checking against an emulator
+
+`cargo test -p ppu-cli --test tg16_rom_emu` builds ROMs for `sunset.lua`,
+`kit_demo.lua` and a timing fixture (`crates/ppu-cli/tests/fixtures/tg16/rom_timing.lua`),
+plays each in Mednafen's accurate `pce` module (headless, through SDL's dummy
+video driver), and compares every frame with the model after reducing both to
+the VCE's 3-bit channels. It is skipped when `mednafen` or `ffmpeg` is
+missing. Set `PPU_TG16_ROM_OUT=dir` to keep the ROMs, sample frames
+(emulator, model and a diff) and a report. Typical results: the timing
+fixture matches to 0.002% of pixels, `sunset` to 0.06% and `kit_demo` to
+0.13%; the remaining differences are the palette-write delay above.
+
 ## Not modelled yet
 
-SuperGrafx, CD audio, the HuC6280 CPU itself, ROM export, color reduction or
-dithering in the image importers, the interrupt timing of mid-line writes, and
-the exact first-line BYR offset.
+SuperGrafx, CD audio, the HuC6280 CPU itself, color reduction or dithering
+in the image importers, and the interrupt timing of mid-line writes (the
+model applies a hook's palette writes from the line's first pixel; on
+hardware they land a few pixels in). The line-0 BYR behaviour (line 0 shows
+row BYR), burst mode and the overscan color are checked against Mednafen,
+not on a console.
