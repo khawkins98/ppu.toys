@@ -63,7 +63,13 @@ fn converts_layers_palettes_and_sprites() {
     )
     .unwrap();
     assert!(report.contains("Conversion report: Stripe"), "{report}");
-    for f in ["00_snes_data.lua", "01_snes_shim.lua", "10_main.lua", "main.lua", "CONVERT.md"] {
+    for f in [
+        "00_snes_data.lua",
+        "01_snes_shim.lua",
+        "10_main.lua",
+        "main.lua",
+        "CONVERT.md",
+    ] {
         assert!(out.join(f).is_file(), "missing {f}");
     }
     assert_eq!(fs::read_to_string(out.join("10_main.lua")).unwrap(), TOY);
@@ -75,8 +81,16 @@ fn converts_layers_palettes_and_sprites() {
         let w = o.width;
         let (blue, red, yellow, green) = ([0, 0, 255], [255, 0, 0], [255, 255, 0], [0, 255, 0]);
         assert_eq!(px(&o.rgba, w, 5, 9), blue, "frame {f}: backdrop");
-        assert_eq!(px(&o.rgba, w, 5, 10), yellow, "frame {f}: hdma colour on its line");
-        assert_eq!(px(&o.rgba, w, 5, 11), blue, "frame {f}: hdma colour lasts one line");
+        assert_eq!(
+            px(&o.rgba, w, 5, 10),
+            yellow,
+            "frame {f}: hdma colour on its line"
+        );
+        assert_eq!(
+            px(&o.rgba, w, 5, 11),
+            blue,
+            "frame {f}: hdma colour lasts one line"
+        );
         assert_eq!(px(&o.rgba, w, 5, 39), blue, "frame {f}: above the stripe");
         assert_eq!(px(&o.rgba, w, 5, 40), red, "frame {f}: stripe top");
         assert_eq!(px(&o.rgba, w, 5, 47), red, "frame {f}: stripe bottom");
@@ -84,8 +98,16 @@ fn converts_layers_palettes_and_sprites() {
         // An 8x8 sprite in a 16x16 pattern stays in place when flipped.
         assert_eq!(px(&o.rgba, w, 100, 100), green, "frame {f}: sprite");
         assert_eq!(px(&o.rgba, w, 107, 107), green, "frame {f}: sprite corner");
-        assert_eq!(px(&o.rgba, w, 108, 100), blue, "frame {f}: right of the sprite");
-        assert_eq!(px(&o.rgba, w, 99, 100), blue, "frame {f}: left of the sprite");
+        assert_eq!(
+            px(&o.rgba, w, 108, 100),
+            blue,
+            "frame {f}: right of the sprite"
+        );
+        assert_eq!(
+            px(&o.rgba, w, 99, 100),
+            blue,
+            "frame {f}: left of the sprite"
+        );
     }
 }
 

@@ -113,7 +113,12 @@ impl PlaneKey {
     }
     fn name(&self) -> String {
         let (w, h) = self.size();
-        format!("BG{} ({}bpp, {w}x{h}, map {:#06x})", self.n + 1, self.bpp, self.map_base)
+        format!(
+            "BG{} ({}bpp, {w}x{h}, map {:#06x})",
+            self.n + 1,
+            self.bpp,
+            self.map_base
+        )
     }
 }
 
@@ -147,6 +152,11 @@ struct SpriteKey {
     large: bool,
     tile: u16,
 }
+
+/// One enabled layer on one line: (plane, scroll x, scroll y).
+type LineLayer = (usize, i64, i64);
+/// One TG16 sprite of a SNES sprite: (pattern, w, h, x offset, y offset).
+type SpritePart = (usize, usize, usize, usize, usize);
 
 const OBJ_SIZES: [[(usize, usize); 2]; 8] = [
     [(8, 8), (16, 16)],
@@ -184,7 +194,7 @@ struct Notes {
 fn char_pixel_index(mem: &Memory, addr: u32, bpp: u8, fx: u32, fy: u32) -> u8 {
     let bit = 7 - (fx & 7);
     let word = |off: u32| mem.vram[((addr + off) & 0x7fff) as usize];
-    let pair = |w: u16| ((((w as u8) >> bit) & 1) | ((((w >> 8) as u8) >> bit) & 1) << 1) as u8;
+    let pair = |w: u16| (((w as u8) >> bit) & 1) | ((((w >> 8) as u8) >> bit) & 1) << 1;
     let mut i = pair(word(fy));
     if bpp >= 4 {
         i |= pair(word(8 + fy)) << 2;
@@ -210,13 +220,59 @@ fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> usize {
 /// the tile's priority bit.
 fn rank(mode: u8, bg3_priority: bool, n: u8, hi: bool) -> u8 {
     match (mode, n) {
-        (0, 0) => if hi { 1 } else { 3 },
-        (0, 1) => if hi { 2 } else { 4 },
-        (0, 2) => if hi { 5 } else { 7 },
-        (0, 3) => if hi { 6 } else { 8 },
-        (1, 2) => if hi { if bg3_priority { 0 } else { 5 } } else { 6 },
-        (_, 0) => if hi { 1 } else { 3 },
-        (_, 1) => if hi { 2 } else { 4 },
+        (0, 0) => {
+            if hi {
+                1
+            } else {
+                3
+            }
+        }
+        (0, 1) => {
+            if hi {
+                2
+            } else {
+                4
+            }
+        }
+        (0, 2) => {
+            if hi {
+                5
+            } else {
+                7
+            }
+        }
+        (0, 3) => {
+            if hi {
+                6
+            } else {
+                8
+            }
+        }
+        (1, 2) => {
+            if hi {
+                if bg3_priority {
+                    0
+                } else {
+                    5
+                }
+            } else {
+                6
+            }
+        }
+        (_, 0) => {
+            if hi {
+                1
+            } else {
+                3
+            }
+        }
+        (_, 1) => {
+            if hi {
+                2
+            } else {
+                4
+            }
+        }
         _ => 9,
     }
 }
@@ -242,7 +298,11 @@ fn decode_plane(p: &mut Plane) {
     let k = p.key;
     let (w, h) = k.size();
     let ts = k.tile_size as u32;
-    let band = if p.mode == 0 && k.bpp == 2 { k.n as u16 * 32 } else { 0 };
+    let band = if p.mode == 0 && k.bpp == 2 {
+        k.n as u16 * 32
+    } else {
+        0
+    };
     let mut index = vec![0u8; w * h];
     let mut prio = vec![false; w * h];
     for wy in 0..h as u32 {
@@ -273,7 +333,10 @@ fn decode_plane(p: &mut Plane) {
     }
     let cov = (0..h)
         .map(|y| {
-            let opaque = index[y * w..(y + 1) * w].iter().filter(|&&i| i != 0).count();
+            let opaque = index[y * w..(y + 1) * w]
+                .iter()
+                .filter(|&&i| i != 0)
+                .count();
             (opaque * 256 / w) as u32
         })
         .collect();
@@ -305,7 +368,11 @@ fn decode_sprite(mem: &Memory, k: &SpriteKey) -> (usize, usize, Vec<u8>) {
 }
 
 fn rgb_of(c: u16) -> [i32; 3] {
-    [(c & 31) as i32, ((c >> 5) & 31) as i32, ((c >> 10) & 31) as i32]
+    [
+        (c & 31) as i32,
+        ((c >> 5) & 31) as i32,
+        ((c >> 10) & 31) as i32,
+    ]
 }
 
 fn dist(a: u16, b: u16) -> i32 {
@@ -325,10 +392,17 @@ impl Palettes {
     /// and, for each index in `s`, the slot (1..15) it maps to.
     fn place(&mut self, s: &[u8], cgram: &[u16; 256]) -> (usize, HashMap<u8, u8>) {
         let slots = |p: &Vec<u8>| -> HashMap<u8, u8> {
-            p.iter().enumerate().map(|(i, &c)| (c, i as u8 + 1)).collect()
+            p.iter()
+                .enumerate()
+                .map(|(i, &c)| (c, i as u8 + 1))
+                .collect()
         };
         // A palette that already holds every colour.
-        if let Some(p) = self.sets.iter().position(|p| s.iter().all(|c| p.contains(c))) {
+        if let Some(p) = self
+            .sets
+            .iter()
+            .position(|p| s.iter().all(|c| p.contains(c)))
+        {
             return (p, slots(&self.sets[p]));
         }
         // The palette that can take the colours with the most overlap.
@@ -372,15 +446,16 @@ impl Palettes {
             }
         }
         let mut map = slots(&self.sets[i]);
+        let set = &self.sets[i];
         for &c in s {
-            if !map.contains_key(&c) {
-                let (slot, _) = self.sets[i]
+            map.entry(c).or_insert_with(|| {
+                let (slot, _) = set
                     .iter()
                     .enumerate()
                     .min_by_key(|(_, &o)| dist(cgram[c as usize], cgram[o as usize]))
                     .unwrap();
-                map.insert(c, slot as u8 + 1);
-            }
+                slot as u8 + 1
+            });
         }
         (i, map)
     }
@@ -448,12 +523,20 @@ fn lua_str_list(out: &mut String, items: &[String]) {
 }
 
 fn hex_pixels(px: &[u8]) -> String {
-    px.iter().map(|&p| char::from_digit(p as u32 & 15, 16).unwrap()).collect()
+    px.iter()
+        .map(|&p| char::from_digit(p as u32 & 15, 16).unwrap())
+        .collect()
 }
 
 fn safe_lua_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -464,7 +547,11 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     let end = crate::frame_number(opts.duration)?;
     ensure!(end > 0, "duration must be at least one frame");
     ensure!(
-        !out.exists() || out.read_dir().map(|mut d| d.next().is_none()).unwrap_or(false),
+        !out.exists()
+            || out
+                .read_dir()
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false),
         "{} already exists and is not empty",
         out.display()
     );
@@ -489,8 +576,14 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         }
     }
     let mut files: Vec<(&str, &str)> = vec![("__convert.lua", RECORDER)];
-    files.extend(body.files.iter().map(|f| (f.name.as_str(), f.source.as_str())));
-    engine.set_sources(&files).map_err(crate::author::lua_error)?;
+    files.extend(
+        body.files
+            .iter()
+            .map(|f| (f.name.as_str(), f.source.as_str())),
+    );
+    engine
+        .set_sources(&files)
+        .map_err(crate::author::lua_error)?;
     let dump = engine
         .call_ints("__cv_dump", &[])
         .map_err(crate::author::lua_error)?;
@@ -515,7 +608,10 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         }
     }
     let all_text: String = body.files.iter().map(|f| f.source.as_str()).collect();
-    if ["score{", "score {", "kon(", "voice[", "timer("].iter().any(|s| all_text.contains(s)) {
+    if ["score{", "score {", "kon(", "voice[", "timer("]
+        .iter()
+        .any(|s| all_text.contains(s))
+    {
         notes.audio = true;
     }
     if all_text.contains("raster(") {
@@ -526,7 +622,7 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     let mut planes: Vec<Plane> = Vec::new();
     let mut plane_ids: HashMap<PlaneKey, usize> = HashMap::new();
     // Per line of every frame: (plane, scroll x, scroll y) of each enabled layer.
-    let mut seen_lines: Vec<(usize, Vec<(usize, i64, i64)>)> = Vec::new();
+    let mut seen_lines: Vec<(usize, Vec<LineLayer>)> = Vec::new();
     let mut sprites: BTreeMap<SpriteKey, (usize, usize, Vec<u8>)> = BTreeMap::new();
     let mut snes_frames: HashMap<u32, Vec<u8>> = HashMap::new();
     let compare: HashSet<u32> = opts.compare.iter().copied().collect();
@@ -646,7 +742,9 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
                 large: o.large,
                 tile: o.tile & 0x1ff,
             };
-            sprites.entry(key).or_insert_with(|| decode_sprite(mem, &key));
+            sprites
+                .entry(key)
+                .or_insert_with(|| decode_sprite(mem, &key));
         }
         notes.max_oam = notes.max_oam.max(oam);
         notes.max_parts = notes.max_parts.max(parts);
@@ -676,7 +774,13 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         }
     }
     let mut order: Vec<usize> = (0..planes.len()).collect();
-    order.sort_by_key(|&i| (std::cmp::Reverse(driver_lines[i]), std::cmp::Reverse(planes[i].lines), planes[i].key));
+    order.sort_by_key(|&i| {
+        (
+            std::cmp::Reverse(driver_lines[i]),
+            std::cmp::Reverse(planes[i].lines),
+            planes[i].key,
+        )
+    });
     let mut positioned: HashMap<usize, (i64, i64)> = HashMap::new();
     let mut drift: HashMap<usize, i64> = HashMap::new();
     let mut alone: Vec<usize> = Vec::new();
@@ -693,7 +797,9 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
             // Offsets against already placed planes it shares lines with.
             let mut obs: HashMap<(i64, i64), u64> = HashMap::new();
             for (_, here) in &seen_lines {
-                let Some(&(_, sx, sy)) = here.iter().find(|e| e.0 == id) else { continue };
+                let Some(&(_, sx, sy)) = here.iter().find(|e| e.0 == id) else {
+                    continue;
+                };
                 if let Some(&(q, qx, qy)) = here.iter().find(|e| positioned.contains_key(&e.0)) {
                     let (ox, oy) = positioned[&q];
                     *obs.entry((sx - qx + ox, sy - qy + oy)).or_default() += 1;
@@ -715,8 +821,8 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         }
     }
     for &id in &order {
-        if !positioned.contains_key(&id) {
-            positioned.insert(id, (0, 0));
+        if let std::collections::hash_map::Entry::Vacant(e) = positioned.entry(id) {
+            e.insert((0, 0));
             alone.push(id);
         }
     }
@@ -762,10 +868,7 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     }
 
     // Reference colours for any lossy palette decisions.
-    let reference: [u16; 256] = planes
-        .first()
-        .map(|p| p.mem.cgram)
-        .unwrap_or(placed.cgram);
+    let reference: [u16; 256] = planes.first().map(|p| p.mem.cgram).unwrap_or(placed.cgram);
 
     // Tiles and palettes.
     let (tw, th) = (cw / 8, ch / 8);
@@ -785,9 +888,15 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
             tile_sets.push(s);
         }
     }
-    let mut pals = Palettes { sets: Vec::new(), lossy_tiles: 0, merged_tiles: 0 };
+    let mut pals = Palettes {
+        sets: Vec::new(),
+        lossy_tiles: 0,
+        merged_tiles: 0,
+    };
     // Place big sets first so small ones can share their palettes.
-    let mut by_size: Vec<usize> = (0..tile_sets.len()).filter(|&i| !tile_sets[i].is_empty()).collect();
+    let mut by_size: Vec<usize> = (0..tile_sets.len())
+        .filter(|&i| !tile_sets[i].is_empty())
+        .collect();
     by_size.sort_by_key(|&i| (std::cmp::Reverse(tile_sets[i].len()), tile_sets[i].clone()));
     let mut tile_pal: Vec<(usize, HashMap<u8, u8>)> = vec![(0, HashMap::new()); tile_sets.len()];
     for &i in &by_size {
@@ -837,7 +946,7 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     let mut used = vec![false; 1024];
     let mut patterns: Vec<(usize, [u8; 256])> = Vec::new();
     let mut part_ids: HashMap<(usize, usize, Vec<u8>), usize> = HashMap::new();
-    let mut sprite_parts: BTreeMap<SpriteKey, Vec<(usize, usize, usize, usize, usize)>> = BTreeMap::new();
+    let mut sprite_parts: BTreeMap<SpriteKey, Vec<SpritePart>> = BTreeMap::new();
     let mut out_of_patterns = 0usize;
     for (key, (w, h, px)) in &sprites {
         let (pw, ph) = ((*w).clamp(16, 32), (*h).max(16));
@@ -856,16 +965,20 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
             let base = if let Some(&b) = part_ids.get(&id_key) {
                 b
             } else {
-                let mask = (if pw == 32 { 1 } else { 0 }) | match ph {
-                    32 => 2,
-                    64 => 6,
-                    _ => 0,
-                };
+                let mask = (if pw == 32 { 1 } else { 0 })
+                    | match ph {
+                        32 => 2,
+                        64 => 6,
+                        _ => 0,
+                    };
                 let cells: Vec<(usize, usize)> = (0..ph / 16)
                     .flat_map(|cy| (0..pw / 16).map(move |cx| (cx, cy)))
                     .collect();
                 let found = (first_pattern..1024).find(|&b| {
-                    b & mask == 0 && cells.iter().all(|&(cx, cy)| b + cx + cy * 2 < 1024 && !used[b + cx + cy * 2])
+                    b & mask == 0
+                        && cells
+                            .iter()
+                            .all(|&(cx, cy)| b + cx + cy * 2 < 1024 && !used[b + cx + cy * 2])
                 });
                 let Some(b) = found else {
                     out_of_patterns += 1;
@@ -902,7 +1015,10 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     pal_map.entry(0).or_default().push(0);
     for (p, set) in pals.sets.iter().enumerate() {
         for (slot, &c) in set.iter().enumerate() {
-            pal_map.entry(c as usize).or_default().push(p * 16 + slot + 1);
+            pal_map
+                .entry(c as usize)
+                .or_default()
+                .push(p * 16 + slot + 1);
         }
     }
     for k in 1..128 {
@@ -914,14 +1030,26 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     // Write the TG16 toy.
     fs::create_dir_all(out).with_context(|| format!("cannot create {}", out.display()))?;
     let mut data = String::new();
-    let _ = writeln!(data, "-- Data for the SNES compatibility layer, written by ppu tg16 convert.");
-    let _ = writeln!(data, "-- Graphics, palette map and dma() results captured from the SNES engine.");
+    let _ = writeln!(
+        data,
+        "-- Data for the SNES compatibility layer, written by ppu tg16 convert."
+    );
+    let _ = writeln!(
+        data,
+        "-- Graphics, palette map and dma() results captured from the SNES engine."
+    );
     let _ = writeln!(data, "__snes = {{}}");
     let _ = writeln!(data, "__snes.w, __snes.h = {cw}, {ch}");
-    let _ = writeln!(data, "__snes.first_tile, __snes.first_pattern = {first_tile}, {first_pattern}");
+    let _ = writeln!(
+        data,
+        "__snes.first_tile, __snes.first_pattern = {first_tile}, {first_pattern}"
+    );
     // Tile 0 of the list is blank; tile i is TG16 tile first_tile + i.
     data.push_str("__snes.tiles = ");
-    lua_str_list(&mut data, &tiles.iter().map(|t| hex_pixels(t)).collect::<Vec<_>>());
+    lua_str_list(
+        &mut data,
+        &tiles.iter().map(|t| hex_pixels(t)).collect::<Vec<_>>(),
+    );
     data.push('\n');
     data.push_str("__snes.bat = {");
     for (i, &(id, pal)) in bat_cells.iter().enumerate() {
@@ -1057,13 +1185,24 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
                     img[y * 2048 + 1024..y * 2048 + 1024 + w * 4].copy_from_slice(src);
                 }
             }
-            crate::author::write_png(&dir.join(format!("frame-{f:05}.png")), 512, LINES as u32, &img)?;
+            crate::author::write_png(
+                &dir.join(format!("frame-{f:05}.png")),
+                512,
+                LINES as u32,
+                &img,
+            )?;
         }
     }
     let warnings = tg.warnings();
 
     // The report.
-    let pct = |n: u64| if notes.lines == 0 { 0.0 } else { n as f64 * 100.0 / notes.lines as f64 };
+    let pct = |n: u64| {
+        if notes.lines == 0 {
+            0.0
+        } else {
+            n as f64 * 100.0 / notes.lines as f64
+        }
+    };
     let mut r = String::new();
     let _ = writeln!(r, "# Conversion report: {}\n", body.title);
     let _ = writeln!(
@@ -1074,11 +1213,17 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     let _ = writeln!(r, "## Files\n");
     let _ = writeln!(r, "| File | What it is |\n| --- | --- |");
     let _ = writeln!(r, "| `00_snes_data.lua` | Graphics, palette map and `dma()` results captured from the SNES run |");
-    let _ = writeln!(r, "| `01_snes_shim.lua` | The SNES compatibility layer that runs the SNES Lua on the TG16 |");
+    let _ = writeln!(
+        r,
+        "| `01_snes_shim.lua` | The SNES compatibility layer that runs the SNES Lua on the TG16 |"
+    );
     for (from, to) in &names {
         let _ = writeln!(r, "| `{to}` | `{from}` from the SNES toy, unchanged |");
     }
-    let _ = writeln!(r, "| `main.lua` | Hooks the SNES `init()` and `frame()` into the TG16 engine |\n");
+    let _ = writeln!(
+        r,
+        "| `main.lua` | Hooks the SNES `init()` and `frame()` into the TG16 engine |\n"
+    );
 
     let _ = writeln!(r, "## Background\n");
     if planes.is_empty() {
@@ -1098,7 +1243,11 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         let _ = writeln!(r, "| Layer | On screen | Leads lines | Offset in the squashed layer | Moves against it by up to |\n| --- | --- | --- | --- | --- |");
         for &id in &order {
             let p = &planes[id];
-            let lead = if driver_lines[id] == 0 { "0%".to_string() } else { format!("{:.0}%", pct(driver_lines[id])) };
+            let lead = if driver_lines[id] == 0 {
+                "0%".to_string()
+            } else {
+                format!("{:.0}%", pct(driver_lines[id]))
+            };
             let moves = if alone.contains(&id) {
                 "never on screen with the others".to_string()
             } else if id == order[0] {
@@ -1106,7 +1255,8 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
             } else {
                 let d = drift.get(&id).copied().unwrap_or(0);
                 if d as usize >= p.w.min(p.h) / 2 {
-                    "scrolls on its own; frozen against the base layer on lines it does not lead".to_string()
+                    "scrolls on its own; frozen against the base layer on lines it does not lead"
+                        .to_string()
                 } else {
                     format!("{d} px")
                 }
@@ -1132,13 +1282,43 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     add(notes.mode7_lines > 0, format!("**Mode 7** on {:.0}% of lines. The TG16 cannot rotate or scale a layer; those lines show no background.", pct(notes.mode7_lines)));
     add(notes.math_lines > 0, format!("**Colour math** (add/subtract/half) on {:.0}% of lines. Dropped; lines show the main screen only.", pct(notes.math_lines)));
     add(notes.sub_only_lines > 0, format!("**Sub-screen-only layers** on {:.0}% of lines. Without colour math there is nothing to blend them into, so they are not shown.", pct(notes.sub_only_lines)));
-    add(notes.window_lines > 0, format!("**Windows** on {:.0}% of lines. Dropped; masked layers show everywhere.", pct(notes.window_lines)));
-    add(notes.mosaic_lines > 0, format!("**Mosaic** on {:.0}% of lines. Dropped.", pct(notes.mosaic_lines)));
+    add(
+        notes.window_lines > 0,
+        format!(
+            "**Windows** on {:.0}% of lines. Dropped; masked layers show everywhere.",
+            pct(notes.window_lines)
+        ),
+    );
+    add(
+        notes.mosaic_lines > 0,
+        format!(
+            "**Mosaic** on {:.0}% of lines. Dropped.",
+            pct(notes.mosaic_lines)
+        ),
+    );
     add(notes.line_brightness_lines > 0, format!("**Per-line brightness** on {:.0}% of lines. The TG16 has no brightness register; only the frame-wide brightness is kept (as palette scaling).", pct(notes.line_brightness_lines)));
-    add(notes.offset_per_tile_lines > 0, format!("**Offset-per-tile** (modes 2/4) on {:.0}% of lines. Columns do not scroll separately.", pct(notes.offset_per_tile_lines)));
-    add(notes.hires_lines > 0, format!("**Hi-res modes 5/6** on {:.0}% of lines. Not converted.", pct(notes.hires_lines)));
-    add(notes.direct_color_lines > 0, "**Direct colour** 8bpp layers. Their colours are wrong on the TG16.".to_string());
-    add(cropped, "The SNES map is bigger than the TG16 map (1024x512); the rest is cut off.".to_string());
+    add(
+        notes.offset_per_tile_lines > 0,
+        format!(
+            "**Offset-per-tile** (modes 2/4) on {:.0}% of lines. Columns do not scroll separately.",
+            pct(notes.offset_per_tile_lines)
+        ),
+    );
+    add(
+        notes.hires_lines > 0,
+        format!(
+            "**Hi-res modes 5/6** on {:.0}% of lines. Not converted.",
+            pct(notes.hires_lines)
+        ),
+    );
+    add(
+        notes.direct_color_lines > 0,
+        "**Direct colour** 8bpp layers. Their colours are wrong on the TG16.".to_string(),
+    );
+    add(
+        cropped,
+        "The SNES map is bigger than the TG16 map (1024x512); the rest is cut off.".to_string(),
+    );
     add(!alone.is_empty(), format!("{} layer setup(s) were never on screen with the base layer; they are stacked on top of it at offset 0 and may cover it.", alone.len()));
     for p in &planes {
         add(p.changed_frames > 0, format!("{} changes its map or tiles during the run ({} frames). The TG16 version keeps the graphics from {:.2}s.", p.key.name(), p.changed_frames, f64::from(p.first_frame) / 60.0));
@@ -1146,12 +1326,27 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
     add(pals.merged_tiles > 0, format!("{} tiles use more than 15 colours where layers overlap; their closest colours were merged.", pals.merged_tiles));
     add(pals.lossy_tiles > 0, format!("{} tiles did not fit the 16 background palettes; they use the nearest colours of another palette.", pals.lossy_tiles));
     add(notes.max_parts > 64 || notes.frames_over_64 > 0, format!("**Sprites**: up to {} SNES sprites on screen ({} TG16 sprites needed, 64 exist). Over 64 on {} frames; the highest OAM entries are left out there.", notes.max_oam, notes.max_parts, notes.frames_over_64));
-    add(out_of_patterns > 0, format!("{out_of_patterns} sprite shapes did not fit in VRAM and are not shown."));
+    add(
+        out_of_patterns > 0,
+        format!("{out_of_patterns} sprite shapes did not fit in VRAM and are not shown."),
+    );
     add(notes.audio, "**Sound**: the S-DSP music and samples are not converted. The TG16 PSG is a different instrument; write its part with `wave()` and `psg()`.".to_string());
-    add(notes.raster_rows, "`raster()` register rows are ignored.".to_string());
-    add(!notes.builtin_sources.is_empty(), format!("Built-in sources ({}) are not converted.", notes.builtin_sources.join(", ")));
+    add(
+        notes.raster_rows,
+        "`raster()` register rows are ignored.".to_string(),
+    );
+    add(
+        !notes.builtin_sources.is_empty(),
+        format!(
+            "Built-in sources ({}) are not converted.",
+            notes.builtin_sources.join(", ")
+        ),
+    );
     add(true, "Background and sprite graphics are fixed at conversion: later `vram[]` or `bg[n].map` writes do not change the picture. Palettes, scroll, layer switches and sprites stay live.".to_string());
-    add(true, "Controller input is not wired up yet (`pad` reads as released).".to_string());
+    add(
+        true,
+        "Controller input is not wired up yet (`pad` reads as released).".to_string(),
+    );
 
     let _ = writeln!(r, "## Not converted\n");
     for s in &dropped_list {
@@ -1161,16 +1356,43 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
 
     let _ = writeln!(r, "## TG16 budget meter\n");
     let _ = writeln!(r, "| Measure | Peak | Limit |\n| --- | --- | --- |");
-    let _ = writeln!(r, "| CPU (estimate) | {:.0}% | 100% of a frame |", peak.cpu_share() * 100.0);
+    let _ = writeln!(
+        r,
+        "| CPU (estimate) | {:.0}% | 100% of a frame |",
+        peak.cpu_share() * 100.0
+    );
     let _ = writeln!(r, "| Raster lines | {} | 224 |", peak.raster_lines);
-    let _ = writeln!(r, "| Palette writes | {} | (each costs CPU) |", peak.palette_writes);
+    let _ = writeln!(
+        r,
+        "| Palette writes | {} | (each costs CPU) |",
+        peak.palette_writes
+    );
     let _ = writeln!(r, "| Sprites | {} | 64 |", peak.sprites);
-    let _ = writeln!(r, "| Busiest sprite line | {} units | 16 |", peak.peak_line_units);
-    let _ = writeln!(r, "| VRAM written per frame | {} words | about {} |", peak.vram_words, tg16_core::budget::VBLANK_VRAM_WORDS);
-    let _ = writeln!(r, "| VRAM used | {} of 32768 words | BAT {}, tiles {}, sprite patterns {} |", vram_end.max(tiles_end), bat_words, tiles_end - first_tile * 16, vram_end.saturating_sub(first_pattern * 64));
+    let _ = writeln!(
+        r,
+        "| Busiest sprite line | {} units | 16 |",
+        peak.peak_line_units
+    );
+    let _ = writeln!(
+        r,
+        "| VRAM written per frame | {} words | about {} |",
+        peak.vram_words,
+        tg16_core::budget::VBLANK_VRAM_WORDS
+    );
+    let _ = writeln!(
+        r,
+        "| VRAM used | {} of 32768 words | BAT {}, tiles {}, sprite patterns {} |",
+        vram_end.max(tiles_end),
+        bat_words,
+        tiles_end - first_tile * 16,
+        vram_end.saturating_sub(first_pattern * 64)
+    );
     r.push('\n');
     if let Some((f, p)) = &first_problem {
-        let _ = writeln!(r, "Over budget on {over_frames} frames; first at frame {f}: {p}.\n");
+        let _ = writeln!(
+            r,
+            "Over budget on {over_frames} frames; first at frame {f}: {p}.\n"
+        );
     } else {
         let _ = writeln!(r, "Within budget on every frame.\n");
     }
@@ -1181,7 +1403,10 @@ pub fn convert(input: &Path, out: &Path, opts: &ConvertOptions) -> Result<String
         let _ = writeln!(r, "- warning: {w}");
     }
     if !opts.compare.is_empty() {
-        let _ = writeln!(r, "\nSide-by-side frames (SNES left, TG16 right) are in `compare/`.");
+        let _ = writeln!(
+            r,
+            "\nSide-by-side frames (SNES left, TG16 right) are in `compare/`."
+        );
     }
     fs::write(out.join("CONVERT.md"), &r)?;
     if out.join("compare").exists() && opts.compare.is_empty() {

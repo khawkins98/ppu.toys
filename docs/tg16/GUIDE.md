@@ -273,6 +273,42 @@ directory, and the browser viewer loads the same file.
 - Readers ignore unknown top-level keys and reject another `format` or a
   `version` newer than they know.
 
+## Converting SNES toys
+
+`ppu tg16 convert` turns an SNES ppu.toys toy (a directory with `ppu.json`, or
+a `.ppu.json` pack) into a TG16 toy directory:
+
+```sh
+ppu tg16 convert my-snes-toy -o my-tg16-toy --duration 12 --compare 0,4,8
+ppu tg16 render my-tg16-toy --at 0,4 -o previews
+```
+
+It plays the SNES toy in the SNES engine for `--duration` seconds (default
+12) to learn what it draws, then writes a toy that runs the SNES toy's own
+Lua, unchanged, through a compatibility layer (`01_snes_shim.lua`). The SNES
+globals (`bg[1..4]`, `obj[]`, `cgram`, `screen`, `hdma`, `dma`, ...) keep
+working; after each frame the layer turns them into TG16 writes.
+
+- **Backgrounds.** The SNES layers are stacked into one TG16 background at the
+  offsets they mostly keep to each other. Each line scrolls with the layer
+  that covers most of it, the way TG16 games split the screen into bands;
+  the other layers on that line move with it. Layers that scroll on their
+  own (rain, clouds) look right only on the lines they lead.
+- **Palettes.** Background palettes are packed from the SNES colour indices
+  each 8x8 tile uses, so CGRAM writes, palette cycling and per-line colour
+  changes still work, rounded to the 512-colour palette. A CGRAM write in
+  `hdma()` lasts one line, as on the SNES.
+- **Sprites.** Every sprite shape the run used becomes 16x16 patterns. 8x8
+  SNES sprites still cost a 16-wide sprite unit, and only the first 64 fit.
+- **Not converted:** Mode 7, colour math, windows, mosaic, sub-screen-only
+  layers, per-line brightness, sound, and graphics changes after the run's
+  first frame on screen. `CONVERT.md` lists which of these the toy used and
+  the TG16 budget meter for the result; `--compare` writes SNES|TG16 frames
+  side by side to `compare/`.
+
+The output is an ordinary TG16 toy: edit it, pack it, or play it in the
+viewer. Converting again needs an empty output directory.
+
 ## Not modelled yet
 
 SuperGrafx, CD audio, the HuC6280 CPU itself, ROM export, color reduction or
