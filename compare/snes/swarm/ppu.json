@@ -1,0 +1,6 @@
+{
+  "title": "Swarm (SNES side)",
+  "description": "The TG16 swarm toy's flock on the SNES, with the same Lua logic and a 65816 cycle estimate for it: where the TG16's 7.16 MHz CPU has room to spare and the SNES runs out of frame.",
+  "files": ["10_swarm.lua", "main.lua"],
+  "sources": []
+}
