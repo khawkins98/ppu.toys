@@ -154,7 +154,7 @@ From `ppu tg16 check --duration 40`:
 | Busiest line | 16 units | 16 |
 | VRAM words per frame | about 790 | about 1400 in vertical blank |
 
-It runs at 60 frames a second with room to spare. `ppu tg16 rom` turns 20
+It runs at 60 frames a second with room to spare. `ppu tg16 rom` turns 17
 seconds of the attract mode into a 1 MB HuCard image that plays in
 Mednafen, tilting horizon included; that ROM is a recording, not the game,
 because Lua does not run on the console.
