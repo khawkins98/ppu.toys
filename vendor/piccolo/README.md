@@ -181,4 +181,11 @@ overflow-safe integer modulo, and simultaneous assignment. Regression coverage:
 
 ## Local patches
 
-- `thread.rs` `call_function`: omitted parameters are now nil. Previously stale caller registers leaked into them.
+- `thread.rs` `call_function`: omitted parameters are now nil. Previously stale
+  caller registers leaked into them: with `local function f(a, b) return b end`,
+  `f(x)` could return a leftover temporary. Upstream master already truncates
+  the stack the same way after its call-path rewrite, so this needs a release,
+  not a bug report. The generic-for and metamethod call paths grow a fresh
+  frame-sized stack and were checked not to leak. Regression coverage:
+  `crates/tg16-core/tests/lua.rs` and `crates/ppu-core/tests/lua_scalar_semantics.rs`
+  (`parameters_a_caller_leaves_out_are_nil_not_stale_registers`).
