@@ -249,6 +249,13 @@ All are plain Lua in `crates/tg16-core/src/kit.lua`; read it to see the trick.
 - **Sprites** used and the busiest line's units.
 - **VRAM words** written during `frame()` (uploads in `init()` are free); about
   1400 fit in vertical blank.
+- **Software cycles**: time the toy charged itself with `cpu(n)`.
+
+The core sees register, palette, sprite and VRAM writes, but not the work a
+game does in between: filling polygons, decompressing, game logic. A toy that
+does that kind of work in Lua charges a fair HuC6280 estimate for it with
+`cpu(cycles)` inside `frame()` (calls in `init()` are free), and the meter
+adds it to the CPU total.
 
 It warns when a frame goes over, and fails on dropped sprites unless you pass
 `--allow-overflow`.
@@ -401,6 +408,38 @@ missing. Set `PPU_TG16_ROM_OUT=dir` to keep the ROMs, sample frames
 (emulator, model and a diff) and a report. Typical results: the timing
 fixture matches to 0.002% of pixels, `sunset` to 0.06% and `kit_demo` to
 0.13%; the remaining differences are the palette-write delay above.
+
+## 3D on a TG16: Comet Lancer
+
+`crates/tg16-core/toys/comet_lancer/` is an on-rails 3D shooter in the
+style of the polygon flying games of the early 90s. The SNES got those from
+a Super FX chip in the cartridge; the TG16 has nothing like it, so the toy
+fakes 3D the way the console could:
+
+- **The player's ship is real 3D.** 13 flat-shaded polygons are rotated,
+  projected and filled by the CPU into a 64x64 buffer every frame (painter's
+  algorithm, four light levels per material) and uploaded as two 32x64
+  sprites. Only 16x16 cells that have or had pixels are uploaded, so a level
+  ship costs about 500 VRAM words. `cpu()` charges the fill: roughly 20,000
+  cycles, a sixth of the frame.
+- **Everything else in 3D is a scaled sprite set**, drawn once in `init()`
+  at 4 to 10 sizes (the enemy sets by the same polygon code) and picked by a
+  perspective divide. Rings are a mirrored quarter, towers flip to show the
+  side facing the camera. Sprites are sorted near to far, and the farthest
+  are left out when a line would go over 16 units, instead of letting the
+  hardware drop random ones.
+- **The floor is one background layer.** The map holds the checkerboard at
+  about 40 pre-scaled square widths, one map row each. Every floor line
+  picks the row whose width matches its distance (a `BYR` reload) and
+  scrolls it so the squares line up with the camera; forward motion flips
+  the checker phase, which is a shift by one square. Hazier palettes for
+  far rows, backdrop writes for the sky gradient, and one more reload for
+  a mountain band. The horizon cannot tilt, so the ship banks but the world
+  does not.
+
+`ppu tg16 check` puts the whole thing at about 45 to 55% of a frame. Controls:
+the d-pad steers, I fires, II does a barrel roll, Run starts; with nobody at
+the pad it flies itself.
 
 ## Not modelled yet
 

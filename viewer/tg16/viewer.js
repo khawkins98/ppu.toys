@@ -223,6 +223,7 @@ function showBudget(force) {
   $('m-cpu').textContent = `${(b.cpu * 100).toFixed(1)}%`;
   bar('b-cpu', b.cpu);
   $('m-raster').textContent = `${b.rasterLines}`;
+  $('m-soft').textContent = b.software ? `${b.software} (${(b.software / b.cyclesPerFrame * 100).toFixed(1)}%)` : '0';
   $('m-sprites').textContent = `${b.sprites} / 64`;
   bar('b-sprites', b.sprites / 64);
   $('m-units').textContent = `${b.peakLineUnits} / 16${b.droppedLines ? ` (dropped on ${b.droppedLines} lines)` : ''}`;

@@ -786,6 +786,23 @@ fn install<'gc>(ctx: piccolo::Context<'gc>, state: &Rc<RefCell<State>>) {
         }),
     );
 
+    // cpu(cycles): charge the budget meter for work the toy does in software
+    // that the core cannot see, like filling polygons or game logic. Free in
+    // init(), like VRAM uploads.
+    let st = state.clone();
+    set(
+        "cpu",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let n = int(stack.get(0)).ok_or_else(|| err(ctx, "cpu(cycles)"))?;
+            let mut s = st.borrow_mut();
+            if !s.loading {
+                s.counts.software = s.counts.software.saturating_add(n.max(0) as u32);
+            }
+            stack.clear();
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
     // spr(i, x, y, pattern, {pal, w, h, front, flip_x, flip_y})
     let st = state.clone();
     set(

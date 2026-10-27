@@ -177,6 +177,7 @@ impl Tg16 {
             "paletteWrites": b.palette_writes,
             "vramWords": b.vram_words,
             "sprites": b.sprites,
+            "software": b.software,
             "peakLineUnits": b.peak_line_units,
             "droppedLines": b.dropped_lines,
             "problems": b.problems(),
