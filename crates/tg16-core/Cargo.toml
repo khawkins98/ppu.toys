@@ -7,10 +7,24 @@ repository.workspace = true
 homepage.workspace = true
 description = "Emulated TurboGrafx-16 / PC Engine video (HuC6270 VDC, HuC6260 VCE) for ppu.toys"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The browser viewer's bindings (wasm32 only, see src/wasm.rs). Off by default
+# so host builds and other wasm modules don't pull in wasm-bindgen.
+bindings = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde_json"]
+
 [dependencies]
 piccolo = { package = "piccolo-ppu", version = "0.3.4", path = "../../vendor/piccolo" }
 # Same pin as ppu-core: one getrandom 0.2 so wasm32 builds.
 ahash = "=0.8.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+serde_json = { version = "1", optional = true }
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 png = "0.17"
