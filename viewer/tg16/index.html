@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TG16 Toy Viewer</title>
+<style>
+  :root {
+    --bg: #15161a; --panel: #1f2127; --line: #33363f; --text: #e6e6e6;
+    --dim: #9a9ca4; --accent: #f0a030; --ok: #5cc06a; --warn: #e0b030; --bad: #e05050;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  header .name { color: var(--accent); font-family: ui-monospace, monospace; margin-right: auto; }
+  button, label.btn {
+    font: inherit; color: var(--text); background: #2b2e36; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover, label.btn:hover { background: #363a44; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 600; }
+  input[type=file] { display: none; }
+  main {
+    display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px;
+  }
+  @media (max-width: 820px) { main { grid-template-columns: minmax(0, 1fr); } }
+  #stage {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    background: #000; border-radius: 8px; min-height: 240px; overflow: hidden;
+  }
+  #screen { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  #drop {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(240, 160, 48, .18); border: 3px dashed var(--accent); border-radius: 8px;
+    font-size: 18px; font-weight: 600; pointer-events: none;
+  }
+  body.dragging #drop { display: flex; }
+  aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 8px; }
+  .meter { margin: 6px 0; }
+  .meter .row { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; background: #2b2e36; border-radius: 3px; overflow: hidden; margin-top: 3px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  .bar i.warn { background: var(--warn); }
+  .bar i.bad { background: var(--bad); }
+  #problems, #log { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, monospace; font-size: 12px; }
+  #problems li { color: var(--warn); margin-top: 4px; }
+  #log li { padding: 4px 0; border-top: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  #log li:first-child { border-top: 0; }
+  #log li.error { color: var(--bad); }
+  #log li.warn { color: var(--warn); }
+  #log li.info { color: var(--dim); }
+  .status { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .hint { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TG16 toy viewer</h1>
+  <span class="name" id="toy-name">loading…</span>
+  <button id="sound" class="primary" title="Browsers need a click before playing sound">▶ Sound on</button>
+  <button id="pause" title="Pause / resume (space)">Pause</button>
+  <button id="step" title="Advance one frame (.)" disabled>Step</button>
+  <button id="restart" title="Reload the toy from frame 0 (r)">Restart</button>
+  <label class="btn" title="Open a .tg16.json pack, a .lua file, or .lua + .png files">Open…<input id="file" type="file" accept=".json,.lua,.png" multiple></label>
+  <button id="demo" title="Load the built-in demo">Demo</button>
+</header>
+<main>
+  <div>
+    <div id="stage">
+      <canvas id="screen" width="256" height="224"></canvas>
+      <div id="drop">Drop a .tg16.json, .lua, or .lua + .png files</div>
+    </div>
+    <p class="hint">Drag and drop a <code>.tg16.json</code> pack (from <code>ppu tg16 pack</code>), a single <code>.lua</code>, or several <code>.lua</code> and <code>.png</code> files. Keys: space pause, . step, r restart.</p>
+  </div>
+  <aside>
+    <section>
+      <h2>Budget</h2>
+      <div class="meter"><div class="row"><span>CPU</span><span id="m-cpu">–</span></div><div class="bar"><i id="b-cpu"></i></div></div>
+      <div class="meter"><div class="row"><span>Raster lines</span><span id="m-raster">–</span></div></div>
+      <div class="meter"><div class="row"><span>Sprites</span><span id="m-sprites">–</span></div><div class="bar"><i id="b-sprites"></i></div></div>
+      <div class="meter"><div class="row"><span>Peak line units</span><span id="m-units">–</span></div><div class="bar"><i id="b-units"></i></div></div>
+      <div class="meter"><div class="row"><span>VRAM words / frame</span><span id="m-vram">–</span></div></div>
+      <ul id="problems"></ul>
+    </section>
+    <section>
+      <h2>Status</h2>
+      <div class="status" id="status">–</div>
+    </section>
+    <section>
+      <h2>Messages</h2>
+      <ul id="log"></ul>
+    </section>
+  </aside>
+</main>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

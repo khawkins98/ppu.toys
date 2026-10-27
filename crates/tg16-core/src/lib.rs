@@ -28,3 +28,6 @@ pub use psg::{Psg, SAMPLE_RATE};
 
 pub mod budget;
 pub use budget::{Budget, CYCLES_PER_FRAME};
+
+#[cfg(all(target_arch = "wasm32", feature = "bindings"))]
+mod wasm;

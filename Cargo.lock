@@ -710,8 +710,12 @@ name = "tg16-core"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "getrandom 0.2.17",
+ "js-sys",
  "piccolo-ppu",
  "png",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
