@@ -331,6 +331,9 @@ shared with SNES toys, `pad.a` is button I, `pad.b` is button II and
 `pad.start` is Run. `init()` always sees a released pad. Hosts set it with
 `Engine::set_pad(mask)` (bit 0 = up, in that order); the viewer maps the
 keyboard.
+Tests and tools can read a toy's state between frames with
+`Engine::call_ints(name, args)`, which calls a global Lua function and
+returns the sequence of integers it gives back (Fernwick's `quest_state()`).
 
 ## ROM export
 
@@ -467,6 +470,26 @@ Things the ports show about the two machines:
   share 8 palettes of 15; the TG16 layer addresses 2048 tiles with 16
   palettes. The photo port splits the painting across BG1 and BG2 and gets
   half the palettes.
+
+## A game on both machines: Fernwick
+
+`crates/tg16-core/toys/fernwick/` ([README](../../crates/tg16-core/toys/fernwick/README.md))
+is a small top-down sword-and-key adventure (six overworld screens, a cave,
+three enemy types, hearts, gems, a key, a locked door and a win screen) that
+runs on both engines. Its map, enemies, collision, room transitions,
+attract-mode autopilot and music sequencer are pure Lua files shared
+unchanged with `compare/snes/fernwick/`; only each `main.lua` differs. Given
+the same buttons, the two versions end every frame in the same game state
+(`crates/ppu-cli/tests/fernwick.rs` checks it).
+
+The SNES version draws the ground on BG1, tree canopies on BG2 over the
+hero, the HUD on BG3; colour math for shadows, wisps and the damage flash;
+an HDMA circular window for the cave's lantern light and the iris wipe; and
+a Mode 7 title. The TG16 version fakes each of these: a raster-split HUD,
+canopy sprites redrawn only over the hero, flicker, a band of raster palette
+writes for the light, a box iris of masked lines and 32x64 sprites, and a
+title crest unfolded by per-line BYR writes. It peaks at about half a frame
+in `ppu tg16 check`, and `ppu tg16 rom` records its attract mode.
 
 ## Not modelled yet
 

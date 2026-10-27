@@ -57,6 +57,24 @@ const PORTS = [
       'Music: sine arpeggio with LFO vibrato, triangle pad.',
     ],
   },
+  {
+    id: 'fernwick',
+    label: 'Fernwick (adventure game)',
+    snes: [
+      'One game, two renderers: map, enemies, collision, the attract-mode autopilot and the music sequencer are one shared Lua file (30_game.lua). Given the same buttons, both machines end every frame in the same game state.',
+      'Mode 1: BG1 ground, BG2 tree canopies with tile priority over the hero sprite, BG3 HUD that never scrolls (HDMA hides the other layers on its lines).',
+      'Colour math: shadows and wisps are half-added onto the ground; a fixed-colour red add is the damage flash.',
+      'Cave: a circular colour window, re-aimed by HDMA on each line, lights the hero (subtraction outside it); the same window clips to black for the iris wipe.',
+      'Title: the crest spins and zooms in on Mode 7 over an HDMA gradient. Music and effects on S-DSP samples.',
+    ],
+    tg16: [
+      'HUD: a raster split (map rows 24-27 on lines 0-31, a BYR write at line 32 starts the room); sideways scrolls add BXR writes on the HUD lines.',
+      'Canopies: drawn in the map, plus front sprites redrawn only over the hero when he walks under a tree.',
+      'Shadows and wisps flicker on alternate frames (kit.flicker); the damage flash is a palette rewrite.',
+      'Cave: palettes dimmed, with raster palette writes lighting a band of lines around the hero. Iris: a box made of masked lines and 32x64 sprites at the sides.',
+      'Title: the crest unfolds by picking rows with a BYR write per line, with a decaying BXR wave. PSG music; cpu() charges the Lua game logic.',
+    ],
+  },
 ];
 const EXAMPLES = ['colour-math', 'finale', 'hdma', 'mode7', 'windows'];
 

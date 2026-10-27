@@ -1134,6 +1134,49 @@ impl Engine {
         self.state.borrow().warnings.clone()
     }
 
+    /// Call the global function `name` with integer arguments and return its
+    /// result, a Lua sequence of integers. For tests and tools that read a
+    /// toy's state (a game's room, score, ...) between frames.
+    pub fn call_ints(&mut self, name: &str, args: &[i64]) -> Result<Vec<i64>, LuaError> {
+        let err = |message: String| LuaError {
+            message,
+            line: None,
+            file: None,
+        };
+        let ex = self.lua.enter(|ctx| {
+            match ctx
+                .globals()
+                .get(ctx, piccolo::String::from_slice(&ctx, name.as_bytes()))
+            {
+                Value::Function(f) => {
+                    Ok(ctx.stash(Executor::start(ctx, f, piccolo::Variadic(args.to_vec()))))
+                }
+                _ => Err(format!("no global function {name}")),
+            }
+        });
+        let ex = ex.map_err(err)?;
+        self.lua.finish(&ex);
+        self.lua
+            .try_enter(|ctx| {
+                let Value::Table(t) = ctx.fetch(&ex).take_result::<Value>(ctx)?? else {
+                    return Ok(Err(format!("{name} must return a sequence of integers")));
+                };
+                let mut out = Vec::new();
+                loop {
+                    match t.get(ctx, out.len() as i64 + 1) {
+                        Value::Nil => break,
+                        v => match v.to_integer() {
+                            Some(n) => out.push(n),
+                            None => return Ok(Err(format!("{name} returned a non-integer"))),
+                        },
+                    }
+                }
+                Ok(Ok(out))
+            })
+            .map_err(|e| static_error(e, None))?
+            .map_err(err)
+    }
+
     fn run_chunk(&mut self, name: &str, src: &str) -> Result<(), LuaError> {
         let ex = self
             .lua

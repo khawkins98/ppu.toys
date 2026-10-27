@@ -64,7 +64,8 @@ share of sound RAM, and VRAM claimed by `dma()`).
 The picker has three groups:
 
 - **Close ports**: the TG16 example toys and their hand-written SNES ports in
-  `compare/snes/<name>/` (sunset, kit_demo, photo). Each port does the same
+  `compare/snes/<name>/` (sunset, kit_demo, photo, and the game fernwick,
+  whose logic is one Lua file shared by both). Each port does the same
   thing the SNES way: real BG layers, Mode 7, colour math, windows, the
   S-DSP. The page lists what each side uses.
 - **Auto-converted SNES examples**: the five SNES examples in

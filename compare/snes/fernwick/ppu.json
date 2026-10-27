@@ -1,0 +1,6 @@
+{
+  "title": "Fernwick (SNES)",
+  "description": "A small top-down sword-and-key adventure, the SNES twin of the TG16 toy: BG1 ground, BG2 canopies over the hero, a BG3 HUD, colour-math shadows and wisps, a windowed lantern and iris, a Mode 7 title and S-DSP music. Game logic shared with crates/tg16-core/toys/fernwick.",
+  "files": ["10_art.lua", "20_world.lua", "30_game.lua", "main.lua"],
+  "sources": []
+}
