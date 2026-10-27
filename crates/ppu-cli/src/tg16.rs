@@ -376,6 +376,7 @@ pub fn check(path: &Path, duration: f64, allow_overflow: bool) -> Result<()> {
         peak.vram_words = peak.vram_words.max(b.vram_words);
         peak.raster_lines = peak.raster_lines.max(b.raster_lines);
         peak.sprites = peak.sprites.max(b.sprites);
+        peak.software = peak.software.max(b.software);
         if o.overflow() {
             overflow_frames.push(f);
         }
@@ -397,6 +398,9 @@ pub fn check(path: &Path, duration: f64, allow_overflow: bool) -> Result<()> {
         peak.cpu_share() * 100.0
     );
     println!("  raster lines:   up to {} per frame", peak.raster_lines);
+    if peak.software > 0 {
+        println!("  software (cpu): up to {} cycles per frame", peak.software);
+    }
     println!(
         "  sprites:        up to {}/64, busiest line {}/16 units",
         peak.sprites, peak.peak_line_units

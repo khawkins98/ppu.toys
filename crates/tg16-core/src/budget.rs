@@ -40,6 +40,9 @@ pub struct Counts {
     pub palette_writes: u32,
     pub psg_writes: u32,
     pub sprites: u32,
+    /// Cycles a toy charged with `cpu(n)` for work it does in software
+    /// (polygon filling, decompression, game logic).
+    pub software: u32,
 }
 
 /// The meter for one frame.
@@ -56,6 +59,8 @@ pub struct Budget {
     pub vram_words: u32,
     /// Sprites placed this frame, of 64.
     pub sprites: u32,
+    /// Cycles charged with `cpu(n)`, included in `cycles`.
+    pub software: u32,
     /// Most sprite units any line wanted, of 16.
     pub peak_line_units: u8,
     /// Lines where sprites were dropped.
@@ -83,7 +88,8 @@ impl Budget {
             + counts.palette_writes * cost::VCE_WRITE
             + counts.sprites * cost::SPRITE
             + counts.vram_words * cost::VRAM_WORD
-            + counts.psg_writes * cost::PSG_WRITE;
+            + counts.psg_writes * cost::PSG_WRITE
+            + counts.software;
         Budget {
             cycles,
             raster_lines,
@@ -91,6 +97,7 @@ impl Budget {
             palette_writes: counts.palette_writes,
             vram_words: counts.vram_words,
             sprites: counts.sprites,
+            software: counts.software,
             peak_line_units: out.lines.iter().map(|l| l.units).max().unwrap_or(0),
             dropped_lines: out.lines.iter().filter(|l| l.dropped > 0).count() as u32,
         }
@@ -106,10 +113,11 @@ impl Budget {
         let mut p = Vec::new();
         if self.cycles > CYCLES_PER_FRAME {
             p.push(format!(
-                "estimated CPU {:.0}% of a frame ({} raster lines, {} palette writes)",
+                "estimated CPU {:.0}% of a frame ({} raster lines, {} palette writes, {} software cycles)",
                 self.cpu_share() * 100.0,
                 self.raster_lines,
-                self.palette_writes
+                self.palette_writes,
+                self.software
             ));
         }
         if self.vram_words > VBLANK_VRAM_WORDS {
