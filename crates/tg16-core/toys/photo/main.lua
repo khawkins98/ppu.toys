@@ -27,3 +27,30 @@ function frame(t, f)
     bg.scroll.x = near + floor(sin(d * 0.35 - t * 4) * (1 + d / 18))
   end)
 end
+
+-- Music: a slow, calm arpeggio. Channel 1 plays the melody with a gentle
+-- vibrato from the LFO (channel 2 drives it and stays silent); channel 3 is
+-- a soft triangle pad.
+local ARP = { "E4", "B4", "E5", "G#5", "F#5", "E5", "B4", "G#4",
+              "C#4", "G#4", "C#5", "E5", "D#5", "C#5", "G#4", "E4" }
+local PAD = { "E3", "C#3", "A2", "B2" }
+
+local setup, draw = init, frame
+function init()
+  if setup then setup() end
+  wave(1, "sine")
+  wave(2, "sine")
+  wave(3, "triangle")
+  psg(1, { vol = 24, left = 13, right = 15 })
+  -- LFO rate = 3.58 MHz / (32 * period * freq): about 5 Hz here.
+  psg(2, { on = true, period = 88 })
+  lfo(255, 1)
+  psg(3, { vol = 22, left = 15, right = 12 })
+end
+
+function frame(t, f)
+  draw(t, f)
+  local step = f // 15 -- eighth notes at 120 BPM
+  psg(1, { on = f % 15 < 13, note = ARP[step % 16 + 1] })
+  psg(3, { on = true, note = PAD[(step // 16) % 4 + 1] })
+end

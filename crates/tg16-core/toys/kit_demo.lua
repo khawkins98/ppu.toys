@@ -72,3 +72,32 @@ function frame(t, f)
   kit.mask_lines(0, 23, rgb3(0, 0, 0))
   kit.mask_lines(200, 223, rgb3(0, 0, 0))
 end
+
+-- Music: a driving loop on the PSG. Lead (1), bass (2), noise drums (5).
+local LEAD = { "A4", "C5", "E5", "A5", "G5", "E5", "D5", "E5",
+               "F4", "A4", "C5", "F5", "E5", "C5", "B4", "G4" }
+local BASS = { "A2", "A2", "F2", "F2", "C3", "C3", "G2", "G2" }
+
+local setup, draw = init, frame
+function init()
+  setup()
+  wave(1, "pulse25")
+  wave(2, "saw")
+  psg(1, { vol = 22, left = 15, right = 12 })
+  psg(2, { vol = 26 })
+  psg(5, { vol = 20 })
+end
+
+function frame(t, f)
+  draw(t, f)
+  local step = f // 8 -- 16th notes at about 112 BPM
+  psg(1, { on = f % 8 < 6, note = LEAD[step % 16 + 1] })
+  psg(2, { on = f % 16 < 14, note = BASS[(step // 4) % 8 + 1] })
+  local beat = step % 4
+  -- Kick-ish low noise on the beat, a short bright hat between.
+  if f % 8 == 0 then
+    psg(5, { on = true, noise = beat == 0 and 20 or 30 })
+  elseif f % 8 == 2 then
+    psg(5, { on = false })
+  end
+end
