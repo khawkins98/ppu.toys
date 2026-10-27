@@ -134,7 +134,7 @@ pub fn new_project(dir: &Path) -> Result<()> {
     write_png(&dir.join("assets/floor.png"), 128, 128, &pixels)
 }
 
-fn lua_error(e: LuaError) -> anyhow::Error {
+pub(crate) fn lua_error(e: LuaError) -> anyhow::Error {
     anyhow!(
         "{}:{}: {}",
         e.file.as_deref().unwrap_or("Lua"),
@@ -143,7 +143,7 @@ fn lua_error(e: LuaError) -> anyhow::Error {
     )
 }
 
-fn load_body(path: &Path) -> Result<FileBody> {
+pub(crate) fn load_body(path: &Path) -> Result<FileBody> {
     let text = if path.is_dir() {
         pack(path)?
     } else {
