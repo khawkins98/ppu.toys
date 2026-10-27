@@ -14,8 +14,8 @@ ppu tg16 check my-toy --duration 10
 ppu tg16 audio my-toy --duration 8 -o my-toy.wav
 ```
 
-A toy is a `.lua` file or a directory of them (run in name order, `main.lua`
-last). `init()` runs once; `frame(t, f)` runs every 60 Hz frame with the time in
+A toy is a `.lua` file, a directory of them (run in name order, `main.lua`
+last) with PNGs in `assets/`, or a `.tg16.json` pack (see [Packing](#packing)). `init()` runs once; `frame(t, f)` runs every 60 Hz frame with the time in
 seconds and the frame number.
 
 ## Video memory
@@ -133,6 +133,33 @@ All are plain Lua in `crates/tg16-core/src/kit.lua`; read it to see the trick.
 
 It warns when a frame goes over, and fails on dropped sprites unless you pass
 `--allow-overflow`.
+
+## Packing
+
+`ppu tg16 pack my-toy` writes the whole toy to one file, `my-toy.tg16.json`
+(`-o` picks another name); `ppu tg16 unpack my-toy.tg16.json dir` writes it
+back out. `render`, `check` and `audio` accept a pack wherever they accept a
+directory, and the browser viewer loads the same file.
+
+```json
+{
+  "format": "ppu.toys/tg16",
+  "version": 1,
+  "name": "my-toy",
+  "files": { "main.lua": "<lua source text>", "helpers.lua": "..." },
+  "assets": { "hills.png": "<base64 of the PNG bytes>" }
+}
+```
+
+- `files` holds every `*.lua` at the top of the toy directory. They run in
+  name order with `main.lua` last, whatever order the keys are in.
+- `assets` holds every `*.png` in `assets/`, base64 encoded (standard
+  alphabet, with padding). It may be omitted when empty.
+- Names must be plain file names (no directories, `..` or separators) ending
+  in `.lua` or `.png`; a pack that breaks this is rejected before anything is
+  written. Packs are limited to 32 MiB and 256 files and 256 assets.
+- Readers ignore unknown top-level keys and reject another `format` or a
+  `version` newer than they know.
 
 ## Not modelled yet
 

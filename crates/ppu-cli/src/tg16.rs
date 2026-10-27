@@ -1,51 +1,285 @@
 //! `ppu tg16 ...`: author TurboGrafx-16 toys with the same loop as SNES ones.
 
 use anyhow::{bail, ensure, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tg16_core::Engine;
 
 use crate::author::write_png;
 
-/// Lua files of a toy: a single `.lua` file, or every `.lua` file in a
-/// directory in name order with `main.lua` last.
-pub fn load_sources(path: &Path) -> Result<Vec<(String, String)>> {
-    let mut files: Vec<PathBuf> = if path.is_dir() {
-        fs::read_dir(path)
-            .with_context(|| format!("cannot read {}", path.display()))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "lua"))
-            .collect()
-    } else {
-        vec![path.to_path_buf()]
-    };
-    ensure!(!files.is_empty(), "{} has no .lua files", path.display());
-    files.sort_by_key(|p| {
-        let name = p.file_name().unwrap().to_string_lossy().into_owned();
-        (name == "main.lua", name)
-    });
-    files
-        .into_iter()
-        .map(|p| {
-            let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            let src =
-                fs::read_to_string(&p).with_context(|| format!("cannot read {}", p.display()))?;
-            Ok((name, src))
-        })
-        .collect()
+/// `format` field of a `.tg16.json` pack.
+pub const PACK_FORMAT: &str = "ppu.toys/tg16";
+/// Newest pack `version` this build reads and the one it writes.
+pub const PACK_VERSION: u64 = 1;
+/// Largest pack (JSON text) or toy (sources + asset bytes) accepted.
+pub const MAX_PACK_BYTES: usize = 32 << 20;
+/// Most Lua files, and separately most assets, in one toy.
+pub const MAX_ENTRIES: usize = 256;
+
+/// A TG16 toy in memory: its Lua sources in load order and its PNG assets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Toy {
+    pub name: String,
+    /// `(file name, source)` in load order: name order, `main.lua` last.
+    pub files: Vec<(String, String)>,
+    /// `(file name, raw PNG bytes)` from `assets/`, in name order.
+    pub assets: Vec<(String, Vec<u8>)>,
 }
 
-fn engine(path: &Path) -> Result<Engine> {
-    let sources = load_sources(path)?;
-    let refs: Vec<(&str, &str)> = sources
+/// A bare file name (no directories, no `.`/`..`, no separators) with `ext`.
+fn valid_name(name: &str, ext: &str) -> bool {
+    name.len() > ext.len()
+        && name.ends_with(ext)
+        && !name.contains(['/', '\\', '\0'])
+        && Path::new(name).components().count() == 1
+        && matches!(
+            Path::new(name).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+}
+
+fn load_order(files: &mut [(String, String)]) {
+    files.sort_by(|a, b| (a.0 == "main.lua", &a.0).cmp(&(b.0 == "main.lua", &b.0)));
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+/// Files in `dir` (top level only) whose names end with `ext`.
+fn list(dir: &Path, ext: &str) -> Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = fs::read_dir(dir)
+        .with_context(|| format!("cannot read {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && file_name(p).ends_with(ext))
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+#[derive(serde::Serialize)]
+struct PackOut<'a> {
+    format: &'a str,
+    version: u64,
+    name: &'a str,
+    files: std::collections::BTreeMap<&'a str, &'a str>,
+    assets: std::collections::BTreeMap<&'a str, String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PackIn {
+    format: Option<String>,
+    version: Option<u64>,
+    #[serde(default)]
+    name: String,
+    files: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    assets: std::collections::BTreeMap<String, String>,
+}
+
+impl Toy {
+    /// Read a toy directory: every top-level `*.lua` and every `assets/*.png`.
+    pub fn from_dir(dir: &Path) -> Result<Toy> {
+        let name = fs::canonicalize(dir)
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "toy".into());
+        let mut files = Vec::new();
+        for p in list(dir, ".lua")? {
+            let src =
+                fs::read_to_string(&p).with_context(|| format!("cannot read {}", p.display()))?;
+            files.push((file_name(&p), src));
+        }
+        load_order(&mut files);
+        let mut assets = Vec::new();
+        let asset_dir = dir.join("assets");
+        if asset_dir.is_dir() {
+            for p in list(&asset_dir, ".png")? {
+                let bytes = fs::read(&p).with_context(|| format!("cannot read {}", p.display()))?;
+                assets.push((file_name(&p), bytes));
+            }
+        }
+        let toy = Toy {
+            name,
+            files,
+            assets,
+        };
+        toy.validate()
+            .with_context(|| format!("in {}", dir.display()))?;
+        Ok(toy)
+    }
+
+    /// Parse `.tg16.json` pack text. Unknown top-level keys are ignored.
+    pub fn from_pack_json(text: &str) -> Result<Toy> {
+        ensure!(
+            text.len() <= MAX_PACK_BYTES,
+            "pack is larger than {MAX_PACK_BYTES} bytes"
+        );
+        let pack: PackIn = serde_json::from_str(text).context("invalid .tg16.json pack")?;
+        match pack.format.as_deref() {
+            Some(PACK_FORMAT) => {}
+            Some(other) => bail!("unknown pack format {other:?} (expected {PACK_FORMAT:?})"),
+            None => bail!("not a TG16 pack (no \"format\" field)"),
+        }
+        match pack.version {
+            Some(v) if (1..=PACK_VERSION).contains(&v) => {}
+            Some(v) => bail!("pack version {v} is newer than this ppu reads ({PACK_VERSION})"),
+            None => bail!("pack has no \"version\" field"),
+        }
+        let mut files: Vec<_> = pack.files.into_iter().collect();
+        load_order(&mut files);
+        let assets = pack
+            .assets
+            .into_iter()
+            .map(|(name, data)| {
+                let bytes = BASE64
+                    .decode(data.as_bytes())
+                    .with_context(|| format!("asset {name:?} is not valid base64"))?;
+                Ok((name, bytes))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let toy = Toy {
+            name: pack.name,
+            files,
+            assets,
+        };
+        toy.validate()?;
+        Ok(toy)
+    }
+
+    /// Serialize as `.tg16.json` pack text (keys sorted, pretty-printed).
+    pub fn to_pack_json(&self) -> Result<String> {
+        self.validate()?;
+        let pack = PackOut {
+            format: PACK_FORMAT,
+            version: PACK_VERSION,
+            name: &self.name,
+            files: self
+                .files
+                .iter()
+                .map(|(n, s)| (n.as_str(), s.as_str()))
+                .collect(),
+            assets: self
+                .assets
+                .iter()
+                .map(|(n, b)| (n.as_str(), BASE64.encode(b)))
+                .collect(),
+        };
+        Ok(serde_json::to_string_pretty(&pack)? + "\n")
+    }
+
+    /// Write the toy as a directory: Lua files at the top, PNGs in `assets/`.
+    /// Validates every name before writing anything.
+    pub fn write_dir(&self, dir: &Path) -> Result<()> {
+        self.validate()?;
+        fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        for (name, src) in &self.files {
+            fs::write(dir.join(name), src).with_context(|| format!("cannot write {name}"))?;
+        }
+        let asset_dir = dir.join("assets");
+        fs::create_dir_all(&asset_dir)
+            .with_context(|| format!("cannot create {}", asset_dir.display()))?;
+        for (name, bytes) in &self.assets {
+            fs::write(asset_dir.join(name), bytes)
+                .with_context(|| format!("cannot write assets/{name}"))?;
+        }
+        Ok(())
+    }
+
+    /// Names are safe bare `*.lua` / `*.png` file names, unique, within limits.
+    fn validate(&self) -> Result<()> {
+        ensure!(!self.files.is_empty(), "toy has no .lua files");
+        ensure!(
+            self.files.len() <= MAX_ENTRIES && self.assets.len() <= MAX_ENTRIES,
+            "toy has more than {MAX_ENTRIES} files or assets"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in &self.files {
+            ensure!(
+                valid_name(name, ".lua"),
+                "unsafe or non-.lua file name {name:?}"
+            );
+            ensure!(seen.insert(name.as_str()), "duplicate file {name:?}");
+        }
+        seen.clear();
+        for (name, _) in &self.assets {
+            ensure!(
+                valid_name(name, ".png"),
+                "unsafe or non-.png asset name {name:?}"
+            );
+            ensure!(seen.insert(name.as_str()), "duplicate asset {name:?}");
+        }
+        let total: usize = self.files.iter().map(|(_, s)| s.len()).sum::<usize>()
+            + self.assets.iter().map(|(_, b)| b.len()).sum::<usize>();
+        ensure!(
+            total <= MAX_PACK_BYTES,
+            "toy is larger than {MAX_PACK_BYTES} bytes"
+        );
+        Ok(())
+    }
+}
+
+/// Load a toy from a `.lua` file, a toy directory, or a `.tg16.json` pack.
+pub fn load_toy(path: &Path) -> Result<Toy> {
+    if path.is_dir() {
+        return Toy::from_dir(path);
+    }
+    let name = file_name(path);
+    if name.ends_with(".json") {
+        let text =
+            fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+        return Toy::from_pack_json(&text).with_context(|| format!("in {}", path.display()));
+    }
+    let src =
+        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let stem = path
+        .file_stem()
+        .map_or("toy".into(), |s| s.to_string_lossy().into_owned());
+    Ok(Toy {
+        name: stem,
+        files: vec![(name, src)],
+        assets: Vec::new(),
+    })
+}
+
+/// Lua files of a toy (see [`load_toy`]) in load order.
+pub fn load_sources(path: &Path) -> Result<Vec<(String, String)>> {
+    Ok(load_toy(path)?.files)
+}
+
+/// Pack a toy directory (or `.lua` file) into `.tg16.json` text.
+pub fn pack(path: &Path) -> Result<String> {
+    load_toy(path)?.to_pack_json()
+}
+
+/// Unpack `.tg16.json` text into a toy directory.
+pub fn unpack(text: &str, dir: &Path) -> Result<()> {
+    Toy::from_pack_json(text)?.write_dir(dir)
+}
+
+/// A loaded engine for `toy`: images registered, then its Lua run.
+pub fn engine_from_toy(toy: &Toy) -> Result<Engine> {
+    let mut e = Engine::new();
+    // TODO(importers): decode each asset and call engine.add_image(stem, w, h, rgba) before load()
+    //   for (name, bytes) in &toy.assets {
+    //       let (w, h, rgba) = decode_png(bytes).with_context(|| format!("assets/{name}"))?;
+    //       let stem = name.strip_suffix(".png").unwrap();
+    //       e.add_image(stem, w, h, rgba);
+    //   }
+    let refs: Vec<(&str, &str)> = toy
+        .files
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
-    let mut e = Engine::new();
     if let Err(err) = e.load(&refs) {
         bail!("{err}");
     }
     Ok(e)
+}
+
+fn engine(path: &Path) -> Result<Engine> {
+    engine_from_toy(&load_toy(path)?)
 }
 
 /// Render the requested frames (playing every frame from zero) to PNGs.
@@ -149,11 +383,13 @@ pub fn check(path: &Path, duration: f64, allow_overflow: bool) -> Result<()> {
 
 const STARTER: &str = include_str!("../../tg16-core/toys/sunset.lua");
 
-/// Create a TG16 toy directory with a starter `main.lua`.
+/// Create a TG16 toy directory with a starter `main.lua` and an empty
+/// `assets/` directory for PNGs.
 pub fn new_project(dir: &Path) -> Result<()> {
     ensure!(!dir.exists(), "{} already exists", dir.display());
     fs::create_dir_all(dir)?;
     fs::write(dir.join("main.lua"), STARTER)?;
+    fs::create_dir_all(dir.join("assets"))?;
     Ok(())
 }
 

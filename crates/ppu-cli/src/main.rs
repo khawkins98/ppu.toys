@@ -11,15 +11,18 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
   ppu render <dir|file.ppu.json> --at seconds,... -o <directory>
   ppu docs [topic|all]
   ppu tg16 new <dir>
-  ppu tg16 render <dir|file.lua> --at seconds,... -o <directory>
-  ppu tg16 check <dir|file.lua> [--duration seconds] [--allow-overflow]
-  ppu tg16 audio <dir|file.lua> [--duration seconds] -o <file.wav>
+  ppu tg16 pack <dir> [-o out.tg16.json]
+  ppu tg16 unpack <file.tg16.json> <dir>
+  ppu tg16 render <toy> --at seconds,... -o <directory>
+  ppu tg16 check <toy> [--duration seconds] [--allow-overflow]
+  ppu tg16 audio <toy> [--duration seconds] -o <file.wav>
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
 and backward seeks with playback. --loop adds loop comparisons at sample times.
 render plays from zero to the last requested time and writes numbered PNGs.
 Times round to the nearest 60 Hz frame. PNG sources convert on every load.
+A tg16 <toy> is a directory, a .lua file, or a .tg16.json pack.
 See ppu docs cli for manifests, examples, and supported features.";
 
 fn option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>> {
@@ -114,11 +117,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// `ppu tg16 <new|render|check> ...`: TurboGrafx-16 toys (experimental).
+/// `ppu tg16 <new|pack|unpack|render|check|audio> ...`: TurboGrafx-16 toys
+/// (experimental).
 fn tg16(mut args: Vec<String>) -> Result<()> {
     ensure!(
         args.len() >= 2,
-        "usage: ppu tg16 <new|render|check> <path> ..."
+        "usage: ppu tg16 <new|pack|unpack|render|check|audio> <path> ..."
     );
     let command = args.remove(0);
     let input = PathBuf::from(args.remove(0));
@@ -130,6 +134,35 @@ fn tg16(mut args: Vec<String>) -> Result<()> {
                 "Created {}. Edit main.lua, then run ppu tg16 render.",
                 input.display()
             );
+        }
+        "pack" => {
+            let output = option(&mut args, "-o")?.unwrap_or_else(|| {
+                let toy = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+                let stem = if toy.is_dir() {
+                    toy.file_name()
+                } else {
+                    toy.file_stem()
+                };
+                let stem = stem.and_then(|s| s.to_str()).unwrap_or("toy");
+                format!("{stem}.tg16.json")
+            });
+            ensure!(
+                args.is_empty(),
+                "usage: ppu tg16 pack <dir> [-o out.tg16.json]"
+            );
+            std::fs::write(&output, ppu_cli::tg16::pack(&input)?)
+                .with_context(|| format!("cannot write {output}"))?;
+            println!("Packed {output}");
+        }
+        "unpack" => {
+            ensure!(
+                args.len() == 1,
+                "usage: ppu tg16 unpack <file.tg16.json> <dir>"
+            );
+            let text = std::fs::read_to_string(&input)
+                .with_context(|| format!("cannot read {}", input.display()))?;
+            ppu_cli::tg16::unpack(&text, Path::new(&args[0]))?;
+            println!("Unpacked into {}", args[0]);
         }
         "render" => {
             let times = option(&mut args, "--at")?.context("render requires --at seconds,...")?;
