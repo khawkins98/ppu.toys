@@ -178,3 +178,7 @@ values before evaluating later ones or indexed targets. Local fixes in
 `src/constant.rs` and `src/compiler/compiler.rs` restore Lua floor division,
 overflow-safe integer modulo, and simultaneous assignment. Regression coverage:
 `crates/ppu-core/tests/lua_scalar_semantics.rs` and `crates/ppu-cli/tests/snes.rs`.
+
+## Local patches
+
+- `thread.rs` `call_function`: omitted parameters are now nil. Previously stale caller registers leaked into them.

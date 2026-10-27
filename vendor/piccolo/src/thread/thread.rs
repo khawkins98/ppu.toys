@@ -716,6 +716,9 @@ impl<'gc, 'a> LuaFrame<'gc, 'a> {
                     self.state.stack[function_index + 1..].rotate_left(fixed_params);
                     function_index + 1 + (arg_count - fixed_params)
                 } else {
+                    // Drop stale registers past the passed arguments so missing
+                    // parameters start as nil (Lua semantics).
+                    self.state.stack.truncate(function_index + 1 + arg_count);
                     function_index + 1
                 };
 

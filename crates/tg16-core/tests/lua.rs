@@ -372,3 +372,23 @@ fn pad_buttons_reach_lua_with_snes_aliases() {
     e.frame(0.0, 1).unwrap();
     assert_eq!(e.vdc().sprite(0).y, 0);
 }
+
+#[test]
+fn missing_call_args_are_nil() {
+    // piccolo used to leave the caller's stale registers in omitted parameters.
+    let mut e = load(
+        r#"
+function say(s, hold) result = tostring(hold) end
+function frame()
+  local n = 3
+  say("A " .. n)
+  local r1 = result
+  local t = {1, 2}
+  say(t[1])
+  local r2 = result
+  if r1 ~= "nil" or r2 ~= "nil" then error("stale args: " .. r1 .. " " .. r2) end
+end
+"#,
+    );
+    e.frame(0.0, 0).unwrap_or_else(|err| panic!("{err}"));
+}
