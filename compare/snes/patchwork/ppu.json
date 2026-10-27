@@ -1,0 +1,6 @@
+{
+  "title": "Patchwork (SNES side)",
+  "description": "The TG16 patchwork toy on the SNES: the same quilt and sixteen balloons with 8 BG and 8 sprite palettes, so its colour schemes come in twins.",
+  "files": ["10_patchwork.lua", "main.lua"],
+  "sources": []
+}

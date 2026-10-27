@@ -1,0 +1,9 @@
+{
+  "title": "Reef (SNES side)",
+  "description": "The TG16 reef toy on the SNES: the same painted reef and sixteen fish species, with 8 BG and 8 sprite palettes to the TG16's 16 and 16, and an HDMA water gradient.",
+  "files": ["main.lua"],
+  "sources": [
+    { "name": "reef", "kind": "bg", "file": "assets/reef.png", "options": { "dither": "bayer", "max_palettes": 8 } },
+    { "name": "fish", "kind": "obj", "file": "assets/fish.png", "options": { "cell_size": 32 } }
+  ]
+}

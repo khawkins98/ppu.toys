@@ -1,0 +1,6 @@
+{
+  "title": "Copper (SNES side)",
+  "description": "The TG16 copper toy on the SNES: fourteen stripes whose colours slide line by line, done with Mode 2 offset-per-tile over a pre-drawn gradient instead of per-line palette writes.",
+  "files": ["10_copper.lua", "main.lua"],
+  "sources": []
+}
