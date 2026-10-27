@@ -18,6 +18,7 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
   ppu tg16 audio <toy> [--duration seconds] -o <file.wav>
   ppu tg16 convert <snes-dir|file.ppu.json> -o <dir> [--duration seconds]
             [--compare seconds,...]
+  ppu tg16 rom <toy> [--duration seconds] [--loop] -o <file.pce>
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
@@ -122,12 +123,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// `ppu tg16 <new|pack|unpack|render|check|audio> ...`: TurboGrafx-16 toys
+/// `ppu tg16 <new|pack|unpack|render|check|audio|rom> ...`: TurboGrafx-16 toys
 /// (experimental).
 fn tg16(mut args: Vec<String>) -> Result<()> {
     ensure!(
         args.len() >= 2,
-        "usage: ppu tg16 <new|pack|unpack|render|check|audio|convert> <path> ..."
+        "usage: ppu tg16 <new|pack|unpack|render|check|audio|convert|rom> <path> ..."
     );
     let command = args.remove(0);
     let input = PathBuf::from(args.remove(0));
@@ -217,6 +218,21 @@ fn tg16(mut args: Vec<String>) -> Result<()> {
             )?;
             print!("{report}");
             println!("\nWrote {output}. Try: ppu tg16 render {output} --at 0,2 -o previews");
+        }
+        "rom" => {
+            let duration = option(&mut args, "--duration")?
+                .unwrap_or_else(|| "10".into())
+                .parse()
+                .context("invalid duration")?;
+            let output = option(&mut args, "-o")?.context("rom requires -o <file.pce>")?;
+            let looping = if let Some(i) = args.iter().position(|a| a == "--loop") {
+                args.remove(i);
+                true
+            } else {
+                false
+            };
+            ensure!(args.is_empty(), "unknown rom arguments: {args:?}");
+            ppu_cli::tg16::rom(&input, duration, looping, Path::new(&output))?;
         }
         _ => bail!("unknown tg16 command {command:?}; use ppu --help"),
     }

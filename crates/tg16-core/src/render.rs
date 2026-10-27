@@ -122,11 +122,26 @@ pub fn render(vdc: &Vdc, vce: &Vce, frame: &Frame) -> Output {
     let mut bg_line = vec![0u16; w]; // 0 = transparent, else BG entry
     let mut spr_line: Vec<Option<(u16, bool)>> = vec![None; w];
 
+    // Burst mode: with both layers off when the frame starts, the VDC shows
+    // nothing for the whole frame (it gives the CPU the VRAM bus instead),
+    // whatever later lines enable. Every line shows the overscan color.
+    let burst = frame
+        .lines
+        .first()
+        .is_some_and(|l| !l.bg_on && !l.sprites_on);
+
     let mut row_counter = frame.scroll_y as u32;
     for y in 0..h {
         let regs = &frame.lines[y];
         for &(i, c) in &regs.palette_writes {
             pal.set(i as usize, c);
+        }
+        if burst {
+            let [r, g, b] = to_rgb8(pal.colors[SPRITE_PALETTE_BASE]);
+            for p in rgba[y * w * 4..(y + 1) * w * 4].chunks_exact_mut(4) {
+                p.copy_from_slice(&[r, g, b, 255]);
+            }
+            continue;
         }
         if y > 0 {
             row_counter = row_counter.wrapping_add(1);
@@ -199,13 +214,21 @@ pub fn render(vdc: &Vdc, vce: &Vce, frame: &Frame) -> Output {
             }
         }
 
-        // Compose.
+        // Compose. With the background off and sprites on, empty pixels
+        // show sprite palette 0 color 0 (entry 256, the overscan color)
+        // instead of the backdrop. With both off they show the backdrop.
+        // Checked against Mednafen.
+        let empty = if !regs.bg_on && regs.sprites_on {
+            SPRITE_PALETTE_BASE as u16
+        } else {
+            0
+        };
         let out = &mut rgba[y * w * 4..(y + 1) * w * 4];
         for x in 0..w {
             let entry = match (spr_line[x], bg_line[x]) {
                 (Some((s, front)), b) if front || b == 0 => s,
                 (_, b) if b != 0 => b,
-                _ => 0,
+                _ => empty,
             };
             let [r, g, b] = to_rgb8(pal.colors[entry as usize]);
             out[x * 4..x * 4 + 4].copy_from_slice(&[r, g, b, 255]);

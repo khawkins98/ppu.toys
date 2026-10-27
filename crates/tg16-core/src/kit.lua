@@ -85,14 +85,24 @@ end
 -- Horizontal mask (letterbox, split-screen gap, iris wipe rows): lines
 -- y0..y1 show only a flat color. Hides the layer and sprites there, sets the
 -- backdrop, and puts the old backdrop back on the next line.
+-- Both layers off on line 0 would blank the whole frame (burst mode), so a
+-- mask that starts there keeps sprites on for that one line; with the layer
+-- off and sprites on the VDC shows entry 256 (the overscan color), so that
+-- entry is set too.
 function kit.mask_lines(y0, y1, c)
-  local old = color(0)
+  local old, old_over = color(0), color(256)
   hdma(y0, y1, function(y)
-    show.bg, show.sprites = false, false
-    if y == y0 then color(0, c) end
+    show.bg, show.sprites = false, y == 0
+    if y == y0 then
+      color(0, c)
+      if y == 0 then color(256, c) end
+    end
   end)
   if y1 + 1 < display.height then
-    hdma(y1 + 1, y1 + 1, function() color(0, old) end)
+    hdma(y1 + 1, y1 + 1, function()
+      color(0, old)
+      if y0 == 0 then color(256, old_over) end
+    end)
   end
 end
 

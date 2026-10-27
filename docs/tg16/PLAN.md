@@ -82,8 +82,17 @@ in raster interrupts and VRAM updates.
 Phases 1 to 4 are built on the `tg16-core` branch: the renderer, Lua
 bindings, `ppu tg16 new/render/check/audio`, PSG audio, the kit helpers and the
 budget meter. See [GUIDE.md](GUIDE.md) for the authoring guide. The PNG
-importers (`image_bg`, `image_sprites`) are on `tg16-importers`. Still to do:
-`ppu tg16 pack`, phase 5 (WASM and a browser viewer).
+importers (`image_bg`, `image_sprites`), `ppu tg16 pack` and the browser
+viewer (phase 5) are merged.
+
+ROM export (`ppu tg16 rom`, branch `tg16-rom`) records a toy and replays it
+from a HuCard image with a small HuC6280 player; see "ROM export" in the
+guide. An emulator test plays the ROMs in Mednafen and compares them with the
+model frame by frame. Building it found three model bugs, now fixed: the
+overscan color shows instead of the backdrop when the background is off and
+sprites are on, both layers off on line 0 blanks the frame (burst mode), and
+`kit.mask_lines` relied on neither. Not yet checked: display sizes other than
+256 x 224, and a real console.
 
 ## Phases
 
@@ -101,6 +110,7 @@ Total: 4 to 5 weeks, in line with the earlier estimate.
 
 ## Out of scope for now
 
-SuperGrafx (second VDC and priority mixer), CD-ROM audio, HuC6280 CPU emulation,
-and ROM export. The budget meter estimates CPU cost; it does not run 6502 code.
-ROM export (like the SNES panel has) is a follow-up once the core is stable.
+SuperGrafx (second VDC and priority mixer), CD-ROM audio and HuC6280 CPU
+emulation. The budget meter estimates CPU cost; it does not run 6502 code.
+ROM export replays recorded frames rather than compiling Lua, so a ROM plays
+a fixed recording, not an interactive toy.

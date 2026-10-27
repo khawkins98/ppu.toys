@@ -153,11 +153,46 @@ fn bg_disable_bit_hides_the_layer() {
             palette: 0,
         },
     );
+    let mut vce = vce;
+    vce.set(SPRITE_PALETTE_BASE, GREEN);
     let mut f = frame();
     f.lines[0].bg_on = false;
     let o = render(&vdc, &vce, &f);
-    assert_eq!(px(&o, 0, 0), c(BLUE));
+    // With the layer off (sprites on) the line shows entry 256, the overscan
+    // color, not the backdrop.
+    assert_eq!(px(&o, 0, 0), c(GREEN));
     assert_eq!(px(&o, 0, 1), c(RED));
+    // With both off (not on line 0) it shows the backdrop.
+    f.lines[1].bg_on = false;
+    f.lines[1].sprites_on = false;
+    let o = render(&vdc, &vce, &f);
+    assert_eq!(px(&o, 0, 1), c(BLUE));
+}
+
+#[test]
+fn both_layers_off_on_line_0_blanks_the_frame() {
+    let (mut vdc, mut vce) = setup();
+    vdc.set_bat(
+        BatSize::default(),
+        0,
+        1,
+        BatEntry {
+            tile: T1,
+            palette: 0,
+        },
+    );
+    vce.set(SPRITE_PALETTE_BASE, GREEN);
+    let mut f = frame();
+    f.lines[0].bg_on = false;
+    f.lines[0].sprites_on = false;
+    let o = render(&vdc, &vce, &f);
+    // Burst mode: line 8 (map row 1) enables the layer, but the frame stays
+    // blank in the overscan color.
+    assert_eq!(px(&o, 0, 0), c(GREEN));
+    assert_eq!(px(&o, 0, 8), c(GREEN));
+    f.lines[0].sprites_on = true;
+    let o = render(&vdc, &vce, &f);
+    assert_eq!(px(&o, 0, 8), c(RED));
 }
 
 fn spr(x: i32, y: i32, pattern: u16, front: bool) -> Sprite {
