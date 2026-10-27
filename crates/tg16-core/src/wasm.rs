@@ -121,6 +121,12 @@ impl Tg16 {
 
     /// Run `frame(t, f)` and render it. On a Lua error the last good picture
     /// is kept and the error is thrown.
+    /// Buttons held for the next frame: bits up, down, left, right, I, II,
+    /// select, run (bit 0 = up).
+    pub fn set_pad(&mut self, mask: u16) {
+        self.engine.set_pad(mask);
+    }
+
     pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
         let out = self.engine.render(t, f).map_err(lua_error)?;
         self.width = out.width;

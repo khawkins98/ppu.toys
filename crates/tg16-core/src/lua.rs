@@ -531,6 +531,8 @@ pub struct Engine {
     frame_fn: Option<StashedFunction>,
     frame_file: Option<String>,
     audio: Vec<i16>,
+    /// Joypad buttons held, bit per [`PAD_BUTTONS`] entry.
+    pad: u16,
     /// Lines where a hook ran in the last frame.
     touched: Vec<bool>,
     budget: crate::budget::Budget,
@@ -610,6 +612,22 @@ fn pixels<'gc>(ctx: piccolo::Context<'gc>, v: Value<'gc>, n: usize) -> Result<Ve
             .map_err(|_| format!("expected a table of {n} numbers")),
         _ => Err("pixels must be a hex string or a table".into()),
     }
+}
+
+/// TurboGrafx-16 joypad buttons, in bit order for [`Engine::set_pad`].
+pub const PAD_BUTTONS: [&str; 8] = ["up", "down", "left", "right", "i", "ii", "select", "run"];
+
+/// `pad` table for Lua: the TG16 names plus SNES-style aliases (`a` = I,
+/// `b` = II, `start` = run) so game logic can be shared with SNES toys.
+fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
+    let pad = Table::new(&ctx);
+    for (bit, name) in PAD_BUTTONS.iter().enumerate() {
+        pad.set(ctx, *name, mask & (1 << bit) != 0).unwrap();
+    }
+    for (alias, bit) in [("a", 4), ("b", 5), ("start", 7)] {
+        pad.set(ctx, alias, mask & (1 << bit) != 0).unwrap();
+    }
+    ctx.set_global("pad", pad).unwrap();
 }
 
 /// A PSG channel argument, 1..6 in Lua, 0..5 here.
@@ -1044,6 +1062,7 @@ impl Engine {
             frame_fn: None,
             frame_file: None,
             audio: Vec::new(),
+            pad: 0,
             touched: vec![false; MAX_HEIGHT],
             budget: Default::default(),
             audio_carry: 0.0,
@@ -1061,6 +1080,12 @@ impl Engine {
             rgba,
         };
         self.state.borrow_mut().images.insert(name.to_string(), img);
+    }
+
+    /// Set the buttons held for the next `frame()`: bit `i` is
+    /// `PAD_BUTTONS[i]` (up, down, left, right, I, II, select, run).
+    pub fn set_pad(&mut self, mask: u16) {
+        self.pad = mask;
     }
 
     /// The cost meter for the most recent `render()`.
@@ -1139,6 +1164,8 @@ impl Engine {
     fn load_inner(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let state = self.state.clone();
         self.lua.enter(|ctx| install(ctx, &state));
+        // init() and top-level code see a released pad.
+        self.lua.enter(|ctx| set_pad_table(ctx, 0));
         self.run_chunk("prelude", PRELUDE)?;
         self.run_chunk("kit", KIT)?;
         for (name, src) in files {
@@ -1168,6 +1195,8 @@ impl Engine {
     /// table for the renderer. Sprites are cleared before `frame()` runs, so
     /// it places every sprite it wants on screen.
     pub fn frame(&mut self, t: f64, f: u32) -> Result<Frame, LuaError> {
+        let pad = self.pad;
+        self.lua.enter(|ctx| set_pad_table(ctx, pad));
         {
             let mut s = self.state.borrow_mut();
             s.vdc.sat = [0; SPRITE_COUNT * 4];

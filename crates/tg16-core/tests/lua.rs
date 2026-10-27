@@ -356,3 +356,19 @@ fn regen_kit_golden() {
         .write_image_data(&o.rgba)
         .unwrap();
 }
+
+#[test]
+fn pad_buttons_reach_lua_with_snes_aliases() {
+    let mut e = load(
+        "function frame()\n\
+           if pad.right and pad.i and pad.a and pad.run and pad.start and not pad.b then\n\
+             spr(0, 0, 0, 64)\n\
+           end\n\
+         end",
+    );
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.vdc().sprite(0).y, -64, "released pad: no sprite");
+    e.set_pad(0b1001_1000); // right, I, run
+    e.frame(0.0, 1).unwrap();
+    assert_eq!(e.vdc().sprite(0).y, 0);
+}

@@ -278,3 +278,12 @@ directory, and the browser viewer loads the same file.
 SuperGrafx, CD audio, the HuC6280 CPU itself, ROM export, color reduction or
 dithering in the image importers, the interrupt timing of mid-line writes, and
 the exact first-line BYR offset.
+
+## Controller
+
+`pad` is the first TurboGrafx-16 joypad, refreshed before every `frame()`:
+`up`, `down`, `left`, `right`, `i`, `ii`, `select` and `run`. For game logic
+shared with SNES toys, `pad.a` is button I, `pad.b` is button II and
+`pad.start` is Run. `init()` always sees a released pad. Hosts set it with
+`Engine::set_pad(mask)` (bit 0 = up, in that order); the viewer maps the
+keyboard.

@@ -26,7 +26,7 @@ pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
 
 mod lua;
-pub use lua::{Engine, LuaError};
+pub use lua::{Engine, LuaError, PAD_BUTTONS};
 
 pub mod psg;
 pub use psg::{Psg, SAMPLE_RATE};
