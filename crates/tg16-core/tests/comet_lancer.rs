@@ -25,8 +25,12 @@ const I: u16 = 16;
 const II: u16 = 32;
 const RUN: u16 = 128;
 
-/// BAT word of the title text ("COMET LANCER" at map column 10, row 4).
-const TITLE_CELL: usize = 4 * 64 + 10;
+const SELECT: u16 = 64;
+
+/// BAT word of the first letter of the info bar's message line (map
+/// column 6, row 3 of a 128-wide map), and of a cell that is always blank.
+const MESSAGE_CELL: usize = 3 * 128 + 6;
+const BLANK_CELL: usize = 3 * 128 + 100;
 
 #[test]
 fn attract_mode_flies_itself_and_run_starts_a_game() {
@@ -52,24 +56,30 @@ fn attract_mode_flies_itself_and_run_starts_a_game() {
         soft > 10_000,
         "the polygon ship charges its fill time: {soft}"
     );
-    let title = e.vdc().vram[TITLE_CELL];
+    let blank = e.vdc().vram[BLANK_CELL] & 0xfff;
     assert_ne!(
-        title & 0xfff,
-        e.vdc().vram[0] & 0xfff,
-        "title shown in attract mode"
+        e.vdc().vram[MESSAGE_CELL] & 0xfff,
+        blank,
+        "the title is typed out in attract mode"
     );
 
     step(&mut e, RUN);
-    step(&mut e, 0);
-    assert_ne!(e.vdc().vram[TITLE_CELL], title, "RUN clears the title");
+    assert_eq!(
+        e.vdc().vram[MESSAGE_CELL] & 0xfff,
+        blank,
+        "RUN starts a game and a new message"
+    );
 
-    // Weave, climb, dive, fire and roll for 15 seconds.
+    // Weave, climb, dive, fire, roll and drop a bomb for 15 seconds.
     for k in 0..900u32 {
         let mut pad = I;
         pad |= if k / 90 % 2 == 0 { LEFT } else { RIGHT };
         pad |= if k / 150 % 2 == 0 { UP } else { DOWN };
         if k % 200 == 100 {
             pad |= II;
+        }
+        if k == 400 {
+            pad |= SELECT;
         }
         step(&mut e, pad);
     }
